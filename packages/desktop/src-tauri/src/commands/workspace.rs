@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::types::{
@@ -12,7 +13,8 @@ use crate::workspace::state::{
     stable_workspace_id_for_openwork, stable_workspace_id_for_remote,
 };
 use crate::workspace::watch::{update_workspace_watch, WorkspaceWatchState};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use tauri::State;
 use walkdir::WalkDir;
 use zip::write::FileOptions;
@@ -923,4 +925,206 @@ pub fn workspace_import_config(
         active_id: state.active_id,
         workspaces: state.workspaces,
     })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceCloneResult {
+    pub path: String,
+    pub cloned: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct GitCredentials {
+    username: String,
+    password: String,
+}
+
+const DEFAULT_GIT_USERNAME: &str = "g_wj";
+const DEFAULT_GIT_PASSWORD: &str = "Gao876337";
+
+#[tauri::command]
+pub fn workspace_clone_repo(
+    app: tauri::AppHandle,
+    repo_url: String,
+) -> Result<WorkspaceCloneResult, String> {
+    println!("[workspace] clone repo request");
+    let repo_url = repo_url.trim().to_string();
+    if repo_url.is_empty() {
+        return Err("repoUrl is required".to_string());
+    }
+
+    if !repo_url.starts_with("http://") && !repo_url.starts_with("https://") {
+        return Err("repoUrl must start with http:// or https://".to_string());
+    }
+
+    let (creds, creds_path) = ensure_git_credentials(&app)?;
+    validate_git_credentials(&creds, &creds_path)?;
+
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
+    fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create app data dir {}: {e}", app_data_dir.display()))?;
+
+    let workspaces_dir = app_data_dir.join(".workspaces");
+    fs::create_dir_all(&workspaces_dir).map_err(|e| {
+        format!(
+            "Failed to create workspace cache dir {}: {e}",
+            workspaces_dir.display()
+        )
+    })?;
+
+    let repo_name = derive_repo_name(&repo_url);
+    let target_dir = workspaces_dir.join(repo_name);
+
+    if target_dir.exists() {
+        return Err("Workspace already exists for this repository.".to_string());
+    }
+
+    let authenticated_url = inject_credentials(&repo_url, &creds);
+    let output = Command::new("git")
+        .arg("-c")
+        .arg("credential.helper=")
+        .arg("clone")
+        .arg(&authenticated_url)
+        .arg(&target_dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut message = if stderr.trim().is_empty() {
+            stdout.to_string()
+        } else {
+            stderr.to_string()
+        };
+        if message.trim().is_empty() {
+            message = format!("git exited with status {}", output.status);
+        }
+        message = redact_credentials(&message, &creds);
+        let _ = fs::remove_dir_all(&target_dir);
+        return Err(format!("Git clone failed: {}", message.trim()));
+    }
+
+    if !target_dir.join(".git").is_dir() {
+        let _ = fs::remove_dir_all(&target_dir);
+        return Err("Git clone failed: .git directory missing".to_string());
+    }
+
+    Ok(WorkspaceCloneResult {
+        path: target_dir.to_string_lossy().to_string(),
+        cloned: true,
+    })
+}
+
+fn ensure_git_credentials(app: &tauri::AppHandle) -> Result<(GitCredentials, PathBuf), String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
+    fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to create app data dir {}: {e}", app_data_dir.display()))?;
+
+    let creds_path = app_data_dir.join("git-credentials.json");
+    if !creds_path.exists() {
+        let creds = GitCredentials {
+            username: DEFAULT_GIT_USERNAME.to_string(),
+            password: DEFAULT_GIT_PASSWORD.to_string(),
+        };
+        let payload = serde_json::to_string_pretty(&creds).map_err(|e| e.to_string())?;
+        fs::write(&creds_path, payload)
+            .map_err(|e| format!("Failed to write {}: {e}", creds_path.display()))?;
+        return Ok((creds, creds_path));
+    }
+
+    let raw = fs::read_to_string(&creds_path)
+        .map_err(|e| format!("Failed to read {}: {e}", creds_path.display()))?;
+    let creds = serde_json::from_str::<GitCredentials>(&raw)
+        .map_err(|e| format!("Failed to parse {}: {e}", creds_path.display()))?;
+    Ok((creds, creds_path))
+}
+
+fn validate_git_credentials(creds: &GitCredentials, creds_path: &Path) -> Result<(), String> {
+    let username = creds.username.trim();
+    let password = creds.password.trim();
+    if username.is_empty() || password.is_empty() {
+        return Err(format!(
+            "Git credentials are missing. Update {}",
+            creds_path.display()
+        ));
+    }
+    if username == "CHANGE_ME" || password == "CHANGE_ME" {
+        return Err(format!(
+            "Git credentials are not configured. Update {}",
+            creds_path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn derive_repo_name(repo_url: &str) -> String {
+    let trimmed = repo_url.trim_end_matches('/');
+    let name = trimmed
+        .split('/')
+        .last()
+        .unwrap_or("repo")
+        .trim_end_matches(".git");
+    let mut out = String::new();
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push('-');
+        }
+    }
+    let cleaned = out.trim_matches('-').to_string();
+    if cleaned.is_empty() {
+        "repo".to_string()
+    } else {
+        cleaned
+    }
+}
+
+fn inject_credentials(repo_url: &str, creds: &GitCredentials) -> String {
+    if repo_url.contains('@') {
+        return repo_url.to_string();
+    }
+    if !repo_url.starts_with("http://") && !repo_url.starts_with("https://") {
+        return repo_url.to_string();
+    }
+    let scheme_end = repo_url.find("://").unwrap_or(0) + 3;
+    let (scheme, rest) = repo_url.split_at(scheme_end);
+    let user = url_encode_component(creds.username.trim());
+    let pass = url_encode_component(creds.password.trim());
+    format!("{}{}:{}@{}", scheme, user, pass, rest)
+}
+
+fn url_encode_component(input: &str) -> String {
+    let mut out = String::new();
+    for ch in input.bytes() {
+        let c = ch as char;
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '~' {
+            out.push(c);
+        } else {
+            out.push_str(&format!("%{:02X}", ch));
+        }
+    }
+    out
+}
+
+fn redact_credentials(message: &str, creds: &GitCredentials) -> String {
+    let mut out = message.to_string();
+    let user = creds.username.trim();
+    let pass = creds.password.trim();
+    if !user.is_empty() {
+        out = out.replace(user, "***");
+    }
+    if !pass.is_empty() {
+        out = out.replace(pass, "***");
+    }
+    out
 }
