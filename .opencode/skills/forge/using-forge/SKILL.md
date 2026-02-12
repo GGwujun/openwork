@@ -1,7 +1,11 @@
 ---
 name: using-forge
-description: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions
+description: Use when a legacy workflow explicitly references using-forge; prefer AGENTS.md Skill Usage Guidelines and forge-start
 ---
+
+# Using Forge (Deprecated)
+
+**Deprecated:** Skill-usage rules now live in `AGENTS.md` (Skill Usage Guidelines). For Forge entry, use `forge:forge-start`.
 
 <EXTREMELY-IMPORTANT>
 If you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.
@@ -93,7 +97,7 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 **When to activate:** Behavior change in a repo using the Forge workflow.
 
 **Mainline (skill-only):**
-- **REQUIRED SUB-SKILL:** forge-preflight
+- **REQUIRED SUB-SKILL:** forge-start
 - **REQUIRED SUB-SKILL:** forge:brainstorming
 - **REQUIRED SUB-SKILL:** forge:using-git-worktrees
 - **REQUIRED SUB-SKILL:** forge:writing-plans
@@ -120,7 +124,7 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 | "Archive quickly, verify later." | Verify first; archive preserves truth. |
 
 **Common mistakes:**
-- Skipping `forge-preflight`
+- Skipping `forge-start`
 - Writing code before tests, then retrofitting
 - Archiving without verify because "it's small"
 
@@ -134,4 +138,4 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 - forge:forge-continue (create next artifact)
 - forge:forge-sync-contracts (merge delta contracts)
 - forge:forge-bulk-archive (archive multiple tracks)
-- forge:forge-onboard (guided onboarding)
+- forge:forge-start (optional onboarding built-in)

@@ -1,9 +1,11 @@
 ---
 name: brainstorming
-description: "You MUST use this before any creative work - creating features, building components, adding functionality, or modifying behavior. Explores user intent, requirements and design before implementation."
+description: Use when a legacy workflow explicitly requires brainstorming; prefer forge-plan for new work
 ---
 
-# Brainstorming Ideas Into Designs
+# Brainstorming Ideas Into Designs (Deprecated)
+
+**Deprecated:** Use `forge-plan` to combine brainstorming and planning in one flow.
 
 ## Overview
 
@@ -42,9 +44,9 @@ Start by understanding the current project context, then ask questions one at a 
 
 **Implementation (if continuing):**
 - Ask: "Ready to set up for implementation?"
-- Use forge-preflight to ensure `forge/` structure exists
+- Use forge-start to ensure `forge/` structure exists and detect active tracks
 - Use forge:using-git-worktrees to create isolated workspace
-- Use forge:writing-plans to create detailed implementation plan in `forge/tracks/<change>/tasks.md`
+- Use forge-plan to create design and detailed tasks in one flow
 
 ## Key Principles
 
