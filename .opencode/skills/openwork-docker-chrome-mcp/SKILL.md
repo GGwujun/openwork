@@ -1,9 +1,7 @@
 ---
 name: openwork-docker-chrome-mcp
 description: |
-  Start the OpenWork dev stack via Docker and verify real user flows via Chrome MCP.
-
-  Triggers when user mentions:
+  Use when a user-facing change must be verified end-to-end, or when the user mentions:
   - "dev-up.sh"
   - "docker dev stack"
   - "verify in chrome mcp"
