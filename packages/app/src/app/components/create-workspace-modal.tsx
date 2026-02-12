@@ -8,8 +8,12 @@ import Button from "./button";
 export default function CreateWorkspaceModal(props: {
   open: boolean;
   onClose: () => void;
-  onConfirm: (preset: "starter" | "automation" | "minimal", folder: string | null) => void;
-  onConfirmWorker?: (preset: "starter" | "automation" | "minimal", folder: string | null) => void;
+  onConfirm: (preset: "starter" | "automation" | "minimal", folder: string | null, repoUrl: string | null) => void;
+  onConfirmWorker?: (
+    preset: "starter" | "automation" | "minimal",
+    folder: string | null,
+    repoUrl: string | null,
+  ) => void;
   onPickFolder: () => Promise<string | null>;
   submitting?: boolean;
   inline?: boolean;
@@ -41,6 +45,7 @@ export default function CreateWorkspaceModal(props: {
   const [preset, setPreset] = createSignal<"starter" | "automation" | "minimal">("starter");
   const [selectedFolder, setSelectedFolder] = createSignal<string | null>(null);
   const [pickingFolder, setPickingFolder] = createSignal(false);
+  const [repoUrl, setRepoUrl] = createSignal("");
 
   createEffect(() => {
     if (props.open) {
@@ -73,6 +78,8 @@ export default function CreateWorkspaceModal(props: {
     if (!folder) return translate("dashboard.choose_folder_next");
     return folder;
   };
+  const repoValue = () => repoUrl().trim();
+  const canConfirm = () => Boolean(repoValue() || selectedFolder());
 
   const handlePickFolder = async () => {
     if (pickingFolder()) return;
@@ -174,6 +181,20 @@ export default function CreateWorkspaceModal(props: {
                   </div>
                 </button>
               </div>
+              <div class="ml-9 space-y-2">
+                <label class="text-xs font-medium text-gray-11" for="workspace-repo-url">
+                  {translate("dashboard.git_repo_label")}
+                </label>
+                <input
+                  id="workspace-repo-url"
+                  value={repoUrl()}
+                  onInput={(event) => setRepoUrl(event.currentTarget.value)}
+                  placeholder={translate("dashboard.git_repo_placeholder")}
+                  disabled={submitting()}
+                  class="w-full rounded-lg border border-gray-6 bg-gray-1/60 px-3 py-2 text-sm text-gray-12 placeholder:text-gray-9 focus:outline-none focus:ring-1 focus:ring-indigo-7/40"
+                />
+                <div class="text-[11px] text-gray-9">{translate("dashboard.git_repo_hint")}</div>
+              </div>
             </div>
 
             <div class="space-y-4">
@@ -183,12 +204,12 @@ export default function CreateWorkspaceModal(props: {
                 </div>
                 {translate("dashboard.choose_preset")}
               </div>
-              <div class={`ml-9 grid gap-3 ${!selectedFolder() ? "opacity-50" : ""}`.trim()}>
+              <div class={`ml-9 grid gap-3 ${!canConfirm() ? "opacity-50" : ""}`.trim()}>
                 <For each={options()}>
                   {(opt) => (
                     <div
                       onClick={() => {
-                        if (!selectedFolder()) return;
+                        if (!canConfirm()) return;
                         if (submitting()) return;
                         setPreset(opt.id);
                       }}
@@ -196,7 +217,7 @@ export default function CreateWorkspaceModal(props: {
                         preset() === opt.id
                           ? "bg-indigo-7/10 border-indigo-7/50"
                           : "bg-gray-2 border-gray-6 hover:border-gray-7"
-                      } ${!selectedFolder() || submitting() ? "pointer-events-none" : ""}`.trim()}
+                      } ${!canConfirm() || submitting() ? "pointer-events-none" : ""}`.trim()}
                     >
                       <div class="flex justify-between items-start">
                         <div>
@@ -325,10 +346,10 @@ export default function CreateWorkspaceModal(props: {
           <Show when={props.onConfirmWorker}>
             <Button
               variant="outline"
-              onClick={() => props.onConfirmWorker?.(preset(), selectedFolder())}
-              disabled={!selectedFolder() || submitting() || workerDisabled()}
+              onClick={() => props.onConfirmWorker?.(preset(), selectedFolder(), repoValue() || null)}
+              disabled={!canConfirm() || submitting() || workerDisabled()}
               title={(() => {
-                if (!selectedFolder()) return translate("dashboard.choose_folder_continue");
+                if (!canConfirm()) return translate("dashboard.choose_folder_continue");
                 if (workerDisabled() && workerDisabledReason()) return workerDisabledReason();
                 return undefined;
               })()}
@@ -337,9 +358,9 @@ export default function CreateWorkspaceModal(props: {
             </Button>
           </Show>
           <Button
-            onClick={() => props.onConfirm(preset(), selectedFolder())}
-            disabled={!selectedFolder() || submitting()}
-            title={!selectedFolder() ? translate("dashboard.choose_folder_continue") : undefined}
+            onClick={() => props.onConfirm(preset(), selectedFolder(), repoValue() || null)}
+            disabled={!canConfirm() || submitting()}
+            title={!canConfirm() ? translate("dashboard.choose_folder_continue") : undefined}
           >
             <Show when={submitting()} fallback={confirmLabel()}>
               <span class="inline-flex items-center gap-2">

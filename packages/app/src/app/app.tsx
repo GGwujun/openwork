@@ -5007,12 +5007,12 @@ export default function App() {
           workspaceStore.clearSandboxCreateProgress?.();
         }}
         onPickFolder={workspaceStore.pickWorkspaceFolder}
-        onConfirm={(preset, folder) =>
-          workspaceStore.createWorkspaceFlow(preset, folder)
+        onConfirm={(preset, folder, repoUrl) =>
+          workspaceStore.createWorkspaceFlow(preset, folder, repoUrl)
         }
         onConfirmWorker={
           isTauriRuntime()
-            ? (preset, folder) => workspaceStore.createSandboxFlow(preset, folder)
+            ? (preset, folder, repoUrl) => workspaceStore.createSandboxFlow(preset, folder, repoUrl)
             : undefined
         }
         workerDisabled={(() => {
