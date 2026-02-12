@@ -20,7 +20,7 @@ import type {
   WorkspaceSessionGroup,
 } from "../types";
 
-import type { EngineInfo, OpenworkServerInfo, WorkspaceInfo } from "../lib/tauri";
+import type { EngineInfo, FileReadResult, OpenworkServerInfo, WorkspaceInfo } from "../lib/tauri";
 
 import {
   Box,
@@ -56,6 +56,7 @@ import StatusBar from "../components/status-bar";
 import { buildOpenworkWorkspaceBaseUrl, createOpenworkServerClient } from "../lib/openwork-server";
 import type { OpenworkServerClient, OpenworkServerSettings, OpenworkServerStatus } from "../lib/openwork-server";
 import { join } from "@tauri-apps/api/path";
+import { fsReadFile } from "../lib/tauri";
 import { formatRelativeTime, isTauriRuntime, normalizeDirectoryPath, parseTemplateFrontmatter } from "../utils";
 
 import browserSetupTemplate from "../data/commands/browser-setup.md?raw";
@@ -67,6 +68,8 @@ import type { SidebarSectionState } from "../components/session/sidebar";
 import FlyoutItem from "../components/flyout-item";
 import QuestionModal from "../components/question-modal";
 import TouchedFilesPanel from "../components/session/touched-files-panel";
+import FileTree from "../components/file-tree";
+import FilePreview from "../components/file-preview";
 import MarkdownEditorSidebar from "../components/session/markdown-editor-sidebar";
 
 export type SessionViewProps = {
@@ -230,6 +233,16 @@ export default function SessionView(props: SessionViewProps) {
 
   const [markdownEditorOpen, setMarkdownEditorOpen] = createSignal(false);
   const [markdownEditorPath, setMarkdownEditorPath] = createSignal<string | null>(null);
+
+  const [rightSidebarTab, setRightSidebarTab] = createSignal<"work" | "files">("work");
+  const [expandedFilePathsByWorkspace, setExpandedFilePathsByWorkspace] = createSignal<
+    Record<string, string[]>
+  >({});
+  const [selectedFilePath, setSelectedFilePath] = createSignal<string | null>(null);
+  const [filePreviewContent, setFilePreviewContent] = createSignal<FileReadResult | null>(null);
+  const [filePreviewLoading, setFilePreviewLoading] = createSignal(false);
+  const [filePreviewError, setFilePreviewError] = createSignal<string | null>(null);
+  let previewRequestId = 0;
 
   // When a session is selected (i.e. we are in SessionView), the right sidebar is
   // navigation-only. Avoid showing any tab as "selected" to reduce confusion.
@@ -427,6 +440,88 @@ export default function SessionView(props: SessionViewProps) {
     }
     return "Connect to OpenWork server to attach files.";
   });
+
+  const activeWorkspaceKey = createMemo(() => props.activeWorkspaceId.trim());
+  const expandedFilePaths = createMemo(() => {
+    const key = activeWorkspaceKey();
+    if (!key) return [] as string[];
+    return expandedFilePathsByWorkspace()[key] ?? [];
+  });
+  const canUseFileExplorer = createMemo(() => {
+    if (!isTauriRuntime()) return false;
+    if (props.activeWorkspaceDisplay.workspaceType === "remote") return false;
+    return Boolean(props.activeWorkspaceRoot.trim());
+  });
+  const fileExplorerUnavailableReason = createMemo(() => {
+    if (!isTauriRuntime()) return "File explorer is available in the desktop app.";
+    if (props.activeWorkspaceDisplay.workspaceType === "remote") {
+      return "File explorer is unavailable for remote workspaces.";
+    }
+    if (!props.activeWorkspaceRoot.trim()) return "Select a workspace to browse files.";
+    return "";
+  });
+  const toggleExpandedPath = (path: string) => {
+    const key = activeWorkspaceKey();
+    const trimmed = path.trim();
+    if (!key || !trimmed) return;
+    setExpandedFilePathsByWorkspace((current) => {
+      const list = current[key] ?? [];
+      const nextList = list.includes(trimmed)
+        ? list.filter((entry) => entry !== trimmed)
+        : [...list, trimmed];
+      return { ...current, [key]: nextList };
+    });
+  };
+  const clearFilePreview = () => {
+    previewRequestId += 1;
+    setSelectedFilePath(null);
+    setFilePreviewContent(null);
+    setFilePreviewError(null);
+    setFilePreviewLoading(false);
+  };
+  const handleSelectFile = async (path: string) => {
+    const trimmed = path.trim();
+    if (!trimmed) return;
+    previewRequestId += 1;
+    const requestId = previewRequestId;
+    setSelectedFilePath(trimmed);
+    setFilePreviewContent(null);
+    setFilePreviewError(null);
+
+    if (!canUseFileExplorer()) {
+      setFilePreviewLoading(false);
+      setFilePreviewError(fileExplorerUnavailableReason() || "File preview is unavailable.");
+      return;
+    }
+
+    setFilePreviewLoading(true);
+    try {
+      const content = await fsReadFile(trimmed, props.activeWorkspaceRoot);
+      if (requestId !== previewRequestId) return;
+      setFilePreviewContent(content);
+    } catch (error) {
+      if (requestId !== previewRequestId) return;
+      const message = error instanceof Error ? error.message : "Failed to load file";
+      setFilePreviewError(message);
+    } finally {
+      if (requestId === previewRequestId) {
+        setFilePreviewLoading(false);
+      }
+    }
+  };
+
+  createEffect(
+    on(
+      () => props.activeWorkspaceId,
+      () => {
+        previewRequestId += 1;
+        setSelectedFilePath(null);
+        setFilePreviewContent(null);
+        setFilePreviewError(null);
+        setFilePreviewLoading(false);
+      },
+    ),
+  );
 
   createEffect(() => {
     if (!addWorkspaceMenuOpen()) return;
@@ -1890,6 +1985,19 @@ export default function SessionView(props: SessionViewProps) {
           ref={(el) => (chatContainerEl = el)}
         >
           <div class="max-w-5xl mx-auto w-full">
+          <Show when={selectedFilePath()} keyed>
+            {(path) => (
+              <div class="mb-6">
+                <FilePreview
+                  filePath={path}
+                  content={filePreviewContent()}
+                  loading={filePreviewLoading()}
+                  error={filePreviewError()}
+                  onClose={clearFilePreview}
+                />
+              </div>
+            )}
+          </Show>
           <Show when={props.messages.length === 0}>
             <div class="text-center py-16 px-6 space-y-6">
               <div class="w-16 h-16 bg-dls-hover rounded-3xl mx-auto flex items-center justify-center border border-dls-border">
@@ -2221,119 +2329,173 @@ export default function SessionView(props: SessionViewProps) {
       </main>
 
       <aside class="w-56 hidden md:flex flex-col bg-dls-sidebar border-l border-dls-border p-4">
-        <div class="flex-1 overflow-y-auto space-y-3 pt-2">
-          <TouchedFilesPanel
-            id="sidebar-context"
-            files={touchedFiles()}
-            workspaceRoot={props.activeWorkspaceRoot}
-            onFileClick={openMarkdownEditor}
-          />
-
-          <div class="space-y-1">
+        <div class="flex items-center gap-1 rounded-lg border border-dls-border bg-dls-hover p-1 text-[11px] font-semibold text-dls-secondary">
           <button
             type="button"
-            class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
-              showRightSidebarSelection() && props.tab === "scheduled"
+            class={`flex-1 rounded-md px-2 py-1.5 transition-colors ${
+              rightSidebarTab() === "work"
                 ? "bg-dls-active text-dls-text"
-                : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
+                : "hover:bg-dls-active/60 hover:text-dls-text"
             }`}
-            onClick={() => {
-              props.setTab("scheduled");
-              props.setView("dashboard");
-            }}
+            onClick={() => setRightSidebarTab("work")}
           >
-            <History size={18} />
-            Automations
+            Work
           </button>
           <button
             type="button"
-            class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
-              showRightSidebarSelection() && props.tab === "task-center"
+            class={`flex-1 rounded-md px-2 py-1.5 transition-colors ${
+              rightSidebarTab() === "files"
                 ? "bg-dls-active text-dls-text"
-                : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
+                : "hover:bg-dls-active/60 hover:text-dls-text"
             }`}
-            onClick={() => {
-              props.setTab("task-center");
-              props.setView("dashboard");
-            }}
+            onClick={() => setRightSidebarTab("files")}
           >
-            <KanbanSquare size={18} />
-            Task Center
+            项目目录
           </button>
-          <button
-            type="button"
-            class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
-              showRightSidebarSelection() && props.tab === "skills"
-                ? "bg-dls-active text-dls-text"
-                : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
-            }`}
-            onClick={() => {
-              props.setTab("skills");
-              props.setView("dashboard");
-            }}
-          >
-            <Zap size={18} />
-            Skills
-          </button>
-          <button
-            type="button"
-            class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
-              showRightSidebarSelection() && props.tab === "plugins"
-                ? "bg-dls-active text-dls-text"
-                : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
-            }`}
-            onClick={() => {
-              props.setTab("plugins");
-              props.setView("dashboard");
-            }}
-          >
-            <Cpu size={18} />
-            Plugins
-          </button>
-          <button
-            type="button"
-            class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
-              showRightSidebarSelection() && props.tab === "mcp"
-                ? "bg-dls-active text-dls-text"
-                : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
-            }`}
-            onClick={() => {
-              props.setTab("mcp");
-              props.setView("dashboard");
-            }}
-          >
-            <Box size={18} />
-            Apps
-          </button>
-          <button
-            type="button"
-            class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
-              showRightSidebarSelection() && props.tab === "identities"
-                ? "bg-dls-active text-dls-text"
-                : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
-            }`}
-            onClick={() => {
-              props.setTab("identities");
-              props.setView("dashboard");
-            }}
-          >
-            <MessageCircle size={18} />
-            Identities
-          </button>
-          <button
-            type="button"
-            class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
-              showRightSidebarSelection() && props.tab === "config"
-                ? "bg-dls-active text-dls-text"
-                : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
-            }`}
-            onClick={openConfig}
-          >
-            <SlidersHorizontal size={18} />
-            Config
-          </button>
-          </div>
         </div>
+
+        <Show when={rightSidebarTab() === "work"}>
+          <div class="flex-1 overflow-y-auto space-y-3 pt-3">
+            <TouchedFilesPanel
+              id="sidebar-context"
+              files={touchedFiles()}
+              workspaceRoot={props.activeWorkspaceRoot}
+              onFileClick={openMarkdownEditor}
+            />
+
+            <div class="space-y-1">
+              <button
+                type="button"
+                class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
+                  showRightSidebarSelection() && props.tab === "scheduled"
+                    ? "bg-dls-active text-dls-text"
+                    : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
+                }`}
+                onClick={() => {
+                  props.setTab("scheduled");
+                  props.setView("dashboard");
+                }}
+              >
+                <History size={18} />
+                Automations
+              </button>
+              <button
+                type="button"
+                class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
+                  showRightSidebarSelection() && props.tab === "task-center"
+                    ? "bg-dls-active text-dls-text"
+                    : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
+                }`}
+                onClick={() => {
+                  props.setTab("task-center");
+                  props.setView("dashboard");
+                }}
+              >
+                <KanbanSquare size={18} />
+                Task Center
+              </button>
+              <button
+                type="button"
+                class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
+                  showRightSidebarSelection() && props.tab === "skills"
+                    ? "bg-dls-active text-dls-text"
+                    : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
+                }`}
+                onClick={() => {
+                  props.setTab("skills");
+                  props.setView("dashboard");
+                }}
+              >
+                <Zap size={18} />
+                Skills
+              </button>
+              <button
+                type="button"
+                class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
+                  showRightSidebarSelection() && props.tab === "plugins"
+                    ? "bg-dls-active text-dls-text"
+                    : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
+                }`}
+                onClick={() => {
+                  props.setTab("plugins");
+                  props.setView("dashboard");
+                }}
+              >
+                <Cpu size={18} />
+                Plugins
+              </button>
+              <button
+                type="button"
+                class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
+                  showRightSidebarSelection() && props.tab === "mcp"
+                    ? "bg-dls-active text-dls-text"
+                    : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
+                }`}
+                onClick={() => {
+                  props.setTab("mcp");
+                  props.setView("dashboard");
+                }}
+              >
+                <Box size={18} />
+                Apps
+              </button>
+              <button
+                type="button"
+                class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
+                  showRightSidebarSelection() && props.tab === "identities"
+                    ? "bg-dls-active text-dls-text"
+                    : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
+                }`}
+                onClick={() => {
+                  props.setTab("identities");
+                  props.setView("dashboard");
+                }}
+              >
+                <MessageCircle size={18} />
+                Identities
+              </button>
+              <button
+                type="button"
+                class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
+                  showRightSidebarSelection() && props.tab === "config"
+                    ? "bg-dls-active text-dls-text"
+                    : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
+                }`}
+                onClick={openConfig}
+              >
+                <SlidersHorizontal size={18} />
+                Config
+              </button>
+            </div>
+          </div>
+        </Show>
+
+        <Show when={rightSidebarTab() === "files"}>
+          <div class="flex-1 overflow-y-auto pt-3">
+            <div class="rounded-xl border border-dls-border bg-dls-hover px-1 py-2">
+              <Show
+                when={canUseFileExplorer()}
+                fallback={
+                  <div class="px-3 py-2 text-xs text-dls-secondary">
+                    {fileExplorerUnavailableReason()}
+                  </div>
+                }
+              >
+                <Show when={props.activeWorkspaceRoot.trim()} keyed>
+                  {(workspacePath) => (
+                    <FileTree
+                      workspacePath={workspacePath}
+                      expandedPaths={expandedFilePaths()}
+                      selectedPath={selectedFilePath() ?? undefined}
+                      onToggleExpand={toggleExpandedPath}
+                      onSelectFile={handleSelectFile}
+                    />
+                  )}
+                </Show>
+              </Show>
+            </div>
+          </div>
+        </Show>
       </aside>
 
       <ProviderAuthModal

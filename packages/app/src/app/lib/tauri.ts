@@ -829,18 +829,20 @@ export type FileReadResult = {
 
 /**
  * Read directory contents
- * @param path Directory path to read
+ * @param path Directory path to read (absolute or workspace-relative)
+ * @param workspaceRoot Workspace root for path validation
  * @returns Array of file entries
  */
-export async function fsReadDir(path: string): Promise<FileEntry[]> {
-  return invoke<FileEntry[]>("fs_read_dir", { path });
+export async function fsReadDir(path: string, workspaceRoot: string): Promise<FileEntry[]> {
+  return invoke<FileEntry[]>("fs_read_dir", { path, workspaceRoot });
 }
 
 /**
  * Read file content
- * @param path File path to read
+ * @param path File path to read (absolute or workspace-relative)
+ * @param workspaceRoot Workspace root for path validation
  * @returns File content and metadata
  */
-export async function fsReadFile(path: string): Promise<FileReadResult> {
-  return invoke<FileReadResult>("fs_read_file", { path });
+export async function fsReadFile(path: string, workspaceRoot: string): Promise<FileReadResult> {
+  return invoke<FileReadResult>("fs_read_file", { path, workspaceRoot });
 }

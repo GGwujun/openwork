@@ -14,6 +14,7 @@ interface FileTreeProps {
 interface FileTreeItemProps {
   entry: FileEntry;
   depth: number;
+  workspaceRoot: string;
   expandedPaths: string[];
   selectedPath?: string;
   onToggleExpand: (path: string) => void;
@@ -33,7 +34,7 @@ function FileTreeItem(props: FileTreeItemProps) {
     
     setLoading(true);
     try {
-      const entries = await fsReadDir(props.entry.path);
+      const entries = await fsReadDir(props.entry.path, props.workspaceRoot);
       setChildren(entries);
     } catch (error) {
       console.error("Failed to load directory:", error);
@@ -110,6 +111,7 @@ function FileTreeItem(props: FileTreeItemProps) {
             <FileTreeItem
               entry={child}
               depth={props.depth + 1}
+              workspaceRoot={props.workspaceRoot}
               expandedPaths={props.expandedPaths}
               selectedPath={props.selectedPath}
               onToggleExpand={props.onToggleExpand}
@@ -136,7 +138,7 @@ export default function FileTree(props: FileTreeProps) {
         return;
       }
       setLoading(true);
-      const entries = await fsReadDir(rootPath);
+      const entries = await fsReadDir(rootPath, rootPath);
       setRootEntries(entries);
       setError(null);
     } catch (err) {
@@ -162,6 +164,7 @@ export default function FileTree(props: FileTreeProps) {
             <FileTreeItem
               entry={entry}
               depth={0}
+              workspaceRoot={props.workspacePath}
               expandedPaths={props.expandedPaths}
               selectedPath={props.selectedPath}
               onToggleExpand={props.onToggleExpand}
