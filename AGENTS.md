@@ -25,6 +25,18 @@ Read INFRASTRUCTURE.md
 **Mobile-first matters.** People want to run tasks from their phones, including via messaging surfaces like WhatsApp and Telegram through owpenbot.
 **Slick UI is non-negotiable.** The experience must feel premium, not utilitarian.
 
+## Skill Usage Guidelines
+
+When working with OpenCode skills:
+
+* **1% Rule**: If a skill might apply to your task (even 1% chance), invoke it before acting
+* **Priority Order**: Process skills (brainstorming, debugging) → Implementation skills (frontend, mcp-builder, etc.)
+* **Skill Types**: 
+  - *Rigid* (TDD, debugging): Follow exactly, don't adapt away discipline
+  - *Flexible* (patterns): Adapt principles to context
+* **User Instructions**: "Add X" or "Fix Y" means follow workflows, not skip them
+* **Forge Workflow**: Use `forge:forge-start` as the unified entry point for all Forge work
+
 ## Agent Guidelines for development
 
 * **Purpose-first UI**: prioritize clarity, safety, and approachability for non-technical users.
