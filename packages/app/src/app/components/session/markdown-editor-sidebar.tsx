@@ -3,14 +3,22 @@ import { marked } from "marked";
 import { FileText, RefreshCcw, Save, X } from "lucide-solid";
 
 import Button from "../button";
-import type { OpenworkServerClient, OpenworkWorkspaceFileContent, OpenworkWorkspaceFileWriteResult } from "../../lib/openwork-server";
+import type {
+  OpenworkServerClient,
+  OpenworkWorkspaceFileContent,
+  OpenworkWorkspaceFileWriteResult,
+} from "../../lib/openwork-server";
 import { OpenworkServerError } from "../../lib/openwork-server";
+import { fsReadFile } from "../../lib/tauri";
+import { isTauriRuntime } from "../../utils";
 
 export type MarkdownEditorSidebarProps = {
   open: boolean;
   path: string | null;
   workspaceId: string | null;
   client: OpenworkServerClient | null;
+  workspaceRoot?: string;
+  workspaceType?: "local" | "remote";
   onClose: () => void;
   onToast?: (message: string) => void;
 };
@@ -127,13 +135,26 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
 
   const path = createMemo(() => props.path?.trim() ?? "");
   const title = createMemo(() => (path() ? basename(path()) : "Markdown"));
-  const dirty = createMemo(() => draft() !== original());
-  const canWrite = createMemo(() => Boolean(props.client && props.workspaceId));
-  const canSave = createMemo(() => dirty() && !saving() && canWrite());
+  const isMarkdownFile = createMemo(() => isMarkdown(path()));
+  const isEditableFile = createMemo(() => /\.(md|mdx|markdown|json|ya?ml|toml|js|ts)$/i.test(path()));
+  const isRemoteWorkspace = createMemo(() => props.workspaceType === "remote");
+  const canUseClient = createMemo(() => Boolean(props.client && props.workspaceId));
+  const canUseLocal = createMemo(
+    () => isTauriRuntime() && !isRemoteWorkspace() && Boolean(props.workspaceRoot?.trim())
+  );
+  const canEdit = createMemo(() => isEditableFile() && canUseClient());
+  const dirty = createMemo(() => canEdit() && draft() !== original());
+  const canSave = createMemo(() => dirty() && !saving() && canEdit());
   const writeDisabledReason = createMemo(() => {
-    if (canWrite()) return null;
-    return "Connect to an OpenWork server workspace to edit files.";
+    if (canEdit()) return null;
+    if (!path()) return null;
+    if (!isEditableFile()) {
+      return "Read-only preview. Editing is available for markdown, JSON, YAML, TOML, JavaScript, and TypeScript files.";
+    }
+    if (!canUseClient()) return "Read-only preview. Connect to an OpenWork server workspace to edit.";
+    return "Read-only preview.";
   });
+  const activeView = createMemo(() => (canEdit() ? view() : "preview"));
 
   const previewSource = useThrottledValue(() => (props.open ? draft() : ""), 120);
   const previewHtml = createMemo(() => {
@@ -168,26 +189,35 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
   const load = async (target: string) => {
     const client = props.client;
     const workspaceId = props.workspaceId;
+    const workspaceRoot = props.workspaceRoot?.trim() ?? "";
 
-    if (!client || !workspaceId) {
-      setError(writeDisabledReason());
-      return;
-    }
     if (!target) return;
-    if (!isMarkdown(target)) {
-      setError("Only markdown files are supported.");
-      return;
-    }
 
     setLoading(true);
     setError(null);
     try {
-      const result = (await client.readWorkspaceFile(workspaceId, target)) as OpenworkWorkspaceFileContent;
-      setOriginal(result.content ?? "");
-      setDraft(result.content ?? "");
+      if (canUseLocal() && workspaceRoot) {
+        const result = await fsReadFile(target, workspaceRoot);
+        setOriginal(result.content ?? "");
+        setDraft(result.content ?? "");
+        setLoadedPath(target);
+        setBaseUpdatedAt(null);
+        requestAnimationFrame(() => textareaRef?.focus());
+        return;
+      }
+
+      if (client && workspaceId) {
+        const result = (await client.readWorkspaceFile(workspaceId, target)) as OpenworkWorkspaceFileContent;
+        setOriginal(result.content ?? "");
+        setDraft(result.content ?? "");
+        setLoadedPath(target);
+        setBaseUpdatedAt(typeof result.updatedAt === "number" ? result.updatedAt : null);
+        requestAnimationFrame(() => textareaRef?.focus());
+        return;
+      }
+
+      setError("File preview requires the desktop app or an OpenWork server workspace.");
       setLoadedPath(target);
-      setBaseUpdatedAt(typeof result.updatedAt === "number" ? result.updatedAt : null);
-      requestAnimationFrame(() => textareaRef?.focus());
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load file";
       setError(message);
@@ -201,12 +231,8 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
     const client = props.client;
     const workspaceId = props.workspaceId;
     const target = path();
-    if (!client || !workspaceId || !target) {
-      props.onToast?.("Cannot save: OpenWork server not connected");
-      return;
-    }
-    if (!isMarkdown(target)) {
-      props.onToast?.("Only markdown files are supported");
+    if (!canEdit() || !client || !workspaceId || !target) {
+      props.onToast?.("Read-only preview");
       return;
     }
     if (!dirty()) return;
@@ -308,7 +334,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
 
   createEffect(() => {
     if (!props.open) return;
-    if (view() !== "write") return;
+    if (activeView() !== "write") return;
     requestAnimationFrame(() => textareaRef?.focus());
   });
 
@@ -327,64 +353,73 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                   Unsaved
                 </span>
               </Show>
+              <Show when={!canEdit()}>
+                <span class="text-[10px] px-2 py-0.5 rounded-full border border-dls-border bg-dls-surface text-dls-secondary">
+                  Read-only
+                </span>
+              </Show>
             </div>
             <div class="text-[11px] text-dls-secondary font-mono truncate" title={path()}>
               {path()}
             </div>
           </div>
 
-          <div class="flex items-center gap-2">
-            <div class="flex items-center rounded-lg border border-dls-border bg-dls-surface p-1">
-              <button
-                type="button"
-                class={`h-7 px-2.5 rounded-md text-xs font-medium transition-colors ${
-                  view() === "write"
-                    ? "bg-dls-active text-dls-text"
-                    : "text-dls-secondary hover:text-dls-text"
-                }`}
-                onClick={() => setView("write")}
+            <div class="flex items-center gap-2">
+              <Show when={canEdit()}>
+                <div class="flex items-center rounded-lg border border-dls-border bg-dls-surface p-1">
+                  <button
+                    type="button"
+                    class={`h-7 px-2.5 rounded-md text-xs font-medium transition-colors ${
+                      view() === "write"
+                        ? "bg-dls-active text-dls-text"
+                        : "text-dls-secondary hover:text-dls-text"
+                    }`}
+                    onClick={() => setView("write")}
+                  >
+                    Write
+                  </button>
+                  <button
+                    type="button"
+                    class={`h-7 px-2.5 rounded-md text-xs font-medium transition-colors ${
+                      view() === "preview"
+                        ? "bg-dls-active text-dls-text"
+                        : "text-dls-secondary hover:text-dls-text"
+                    }`}
+                    onClick={() => setView("preview")}
+                  >
+                    Preview
+                  </button>
+                </div>
+              </Show>
+
+              <Button
+                variant="outline"
+                class="text-xs h-9 py-0 px-3"
+                onClick={requestReload}
+                disabled={loading() || saving()}
+                title="Reload from disk"
               >
-                Write
-              </button>
-              <button
-                type="button"
-                class={`h-7 px-2.5 rounded-md text-xs font-medium transition-colors ${
-                  view() === "preview"
-                    ? "bg-dls-active text-dls-text"
-                    : "text-dls-secondary hover:text-dls-text"
-                }`}
-                onClick={() => setView("preview")}
-              >
-                Preview
-              </button>
+                <RefreshCcw size={14} class={loading() ? "animate-spin" : ""} />
+                Reload
+              </Button>
+
+              <Show when={canEdit()}>
+                <Button
+                  class="text-xs h-9 py-0 px-3"
+                  onClick={() => void save()}
+                  disabled={!canSave()}
+                  title={writeDisabledReason() ?? "Save (Ctrl/Cmd+S)"}
+                >
+                  <Save size={14} class={saving() ? "animate-pulse" : ""} />
+                  {saving() ? "Saving..." : "Save"}
+                </Button>
+              </Show>
+
+              <Button variant="ghost" class="!p-2 rounded-full" onClick={requestClose}>
+                <X size={16} />
+              </Button>
             </div>
-
-            <Button
-              variant="outline"
-              class="text-xs h-9 py-0 px-3"
-              onClick={requestReload}
-              disabled={loading() || saving()}
-              title="Reload from disk"
-            >
-              <RefreshCcw size={14} class={loading() ? "animate-spin" : ""} />
-              Reload
-            </Button>
-
-            <Button
-              class="text-xs h-9 py-0 px-3"
-              onClick={() => void save()}
-              disabled={!canSave()}
-              title={writeDisabledReason() ?? "Save (Ctrl/Cmd+S)"}
-            >
-              <Save size={14} class={saving() ? "animate-pulse" : ""} />
-              {saving() ? "Saving..." : "Save"}
-            </Button>
-
-            <Button variant="ghost" class="!p-2 rounded-full" onClick={requestClose}>
-              <X size={16} />
-            </Button>
           </div>
-        </div>
 
         <Show when={writeDisabledReason()}>
           {(reason) => (
@@ -525,7 +560,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
         <div class="flex-1 overflow-hidden">
           <div class="h-full p-4">
             <Show
-              when={view() === "preview"}
+              when={activeView() === "preview"}
               fallback={
                 <textarea
                   ref={textareaRef}
@@ -537,28 +572,37 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                 />
               }
             >
-              <div class="relative h-full">
-                <div
-                  class="h-full overflow-auto rounded-xl border border-dls-border bg-dls-surface px-5 py-4 text-sm leading-relaxed text-dls-text"
-                  classList={{
-                    "[&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:mt-4 [&_h1]:mb-2": true,
-                    "[&_h2]:text-xl [&_h2]:font-semibold [&_h2]:mt-4 [&_h2]:mb-2": true,
-                    "[&_h3]:text-lg [&_h3]:font-semibold [&_h3]:mt-3 [&_h3]:mb-2": true,
-                    "[&_p]:my-3": true,
-                    "[&_ul]:my-3 [&_ul]:pl-5 [&_ul]:list-disc": true,
-                    "[&_ol]:my-3 [&_ol]:pl-5 [&_ol]:list-decimal": true,
-                    "[&_li]:my-1": true,
-                    "[&_blockquote]:border-l-2 [&_blockquote]:border-dls-border [&_blockquote]:pl-4 [&_blockquote]:text-dls-secondary [&_blockquote]:my-4": true,
-                    "[&_hr]:my-4 [&_hr]:border-dls-border": true,
-                  }}
-                  innerHTML={previewHtml()}
-                />
-                <Show when={!previewHtml()}>
-                  <div class="pointer-events-none absolute inset-x-6 top-6 text-xs text-dls-secondary">
-                    Nothing to preview yet. Start typing markdown in Write mode.
-                  </div>
-                </Show>
-              </div>
+              <Show
+                when={isMarkdownFile()}
+                fallback={
+                  <pre class="h-full overflow-auto rounded-xl border border-dls-border bg-dls-surface px-5 py-4 text-sm leading-relaxed text-dls-text whitespace-pre-wrap break-words">
+                    {draft()}
+                  </pre>
+                }
+              >
+                <div class="relative h-full">
+                  <div
+                    class="h-full overflow-auto rounded-xl border border-dls-border bg-dls-surface px-5 py-4 text-sm leading-relaxed text-dls-text"
+                    classList={{
+                      "[&_h1]:text-2xl [&_h1]:font-semibold [&_h1]:mt-4 [&_h1]:mb-2": true,
+                      "[&_h2]:text-xl [&_h2]:font-semibold [&_h2]:mt-4 [&_h2]:mb-2": true,
+                      "[&_h3]:text-lg [&_h3]:font-semibold [&_h3]:mt-3 [&_h3]:mb-2": true,
+                      "[&_p]:my-3": true,
+                      "[&_ul]:my-3 [&_ul]:pl-5 [&_ul]:list-disc": true,
+                      "[&_ol]:my-3 [&_ol]:pl-5 [&_ol]:list-decimal": true,
+                      "[&_li]:my-1": true,
+                      "[&_blockquote]:border-l-2 [&_blockquote]:border-dls-border [&_blockquote]:pl-4 [&_blockquote]:text-dls-secondary [&_blockquote]:my-4": true,
+                      "[&_hr]:my-4 [&_hr]:border-dls-border": true,
+                    }}
+                    innerHTML={previewHtml()}
+                  />
+                  <Show when={!previewHtml()}>
+                    <div class="pointer-events-none absolute inset-x-6 top-6 text-xs text-dls-secondary">
+                      Nothing to preview yet. Start typing markdown in Write mode.
+                    </div>
+                  </Show>
+                </div>
+              </Show>
             </Show>
           </div>
         </div>

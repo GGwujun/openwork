@@ -4492,6 +4492,7 @@ export default function App() {
       openworkServerStatus: openworkStatus,
       openworkServerUrl: openworkServerUrl(),
       openworkServerSettings: openworkServerSettings(),
+      openworkServerClient: openworkServerClient(),
       openworkServerHostInfo: openworkServerHostInfo(),
       openworkServerCapabilities: devtoolsCapabilities(),
       openworkServerDiagnostics: openworkServerDiagnostics(),

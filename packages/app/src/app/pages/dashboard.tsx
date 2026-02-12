@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import type {
   DashboardTab,
   McpServerEntry,
@@ -23,6 +23,7 @@ import { buildOpenworkWorkspaceBaseUrl, createOpenworkServerClient } from "../li
 import type {
   OpenworkAuditEntry,
   OpenworkServerCapabilities,
+  OpenworkServerClient,
   OpenworkServerDiagnostics,
   OpenworkServerSettings,
   OpenworkServerStatus,
@@ -41,6 +42,8 @@ import TaskCenterView from "./task-center";
 import StatusBar from "../components/status-bar";
 import ProviderAuthModal from "../components/provider-auth-modal";
 import ShareWorkspaceModal from "../components/share-workspace-modal";
+import FileTree from "../components/file-tree";
+import MarkdownEditorSidebar from "../components/session/markdown-editor-sidebar";
 import {
   Box,
   ChevronDown,
@@ -86,6 +89,7 @@ export type DashboardViewProps = {
   openworkServerStatus: OpenworkServerStatus;
   openworkServerUrl: string;
   openworkServerSettings: OpenworkServerSettings;
+  openworkServerClient: OpenworkServerClient | null;
   openworkServerHostInfo: OpenworkServerInfo | null;
   openworkServerCapabilities: OpenworkServerCapabilities | null;
   openworkServerDiagnostics: OpenworkServerDiagnostics | null;
@@ -309,7 +313,54 @@ export default function DashboardView(props: DashboardViewProps) {
         : "Remote"
       : "Local";
 
+  const [markdownEditorOpen, setMarkdownEditorOpen] = createSignal(false);
+  const [markdownEditorPath, setMarkdownEditorPath] = createSignal<string | null>(null);
   const [rightSidebarTab, setRightSidebarTab] = createSignal<"work" | "files">("work");
+  const [expandedFilePathsByWorkspace, setExpandedFilePathsByWorkspace] = createSignal<
+    Record<string, string[]>
+  >({});
+  const [selectedFilePath, setSelectedFilePath] = createSignal<string | null>(null);
+
+  const normalizeSidebarPath = (value: string) => String(value ?? "").trim().replace(/[\\/]+/g, "/");
+  const toWorkspaceRelativeForApi = (file: string) => {
+    const normalized = normalizeSidebarPath(file).replace(/^file:\/\//i, "");
+    if (!normalized) return "";
+
+    const root = normalizeSidebarPath(props.activeWorkspaceRoot).replace(/\/+$/, "");
+    const rootKey = root.toLowerCase();
+    const fileKey = normalized.toLowerCase();
+
+    if (root && fileKey.startsWith(`${rootKey}/`)) {
+      return normalized.slice(root.length + 1);
+    }
+    if (root && fileKey === rootKey) {
+      return "";
+    }
+
+    let relative = normalized.replace(/^\.\/+/, "");
+    if (!relative) return "";
+
+    if (/^[ab]\/.+\.(md|mdx|markdown)$/i.test(relative)) {
+      relative = relative.slice(2);
+    }
+
+    if (/^workspace\//i.test(relative)) {
+      relative = relative.replace(/^workspace\//i, "");
+    }
+    if (relative.startsWith("/") || relative.startsWith("~") || /^[a-zA-Z]:\//.test(relative)) return "";
+    if (relative.split("/").some((part) => part === "." || part === "..")) return "";
+    return relative;
+  };
+  const openMarkdownEditor = (file: string) => {
+    const relative = toWorkspaceRelativeForApi(file);
+    if (!relative) return;
+    setMarkdownEditorPath(relative);
+    setMarkdownEditorOpen(true);
+  };
+  const closeMarkdownEditor = () => {
+    setMarkdownEditorOpen(false);
+    setMarkdownEditorPath(null);
+  };
 
   const openSessionFromList = (workspaceId: string, sessionId: string) => {
     // For same-workspace clicks, just select the session without workspace activation
@@ -405,6 +456,52 @@ export default function DashboardView(props: DashboardViewProps) {
     const nextCount = Math.min(MAX_SESSIONS_PREVIEW, remaining);
     return nextCount > 0 ? `Show ${nextCount} more` : "Show more";
   };
+  const activeWorkspaceKey = createMemo(() => props.activeWorkspaceId.trim());
+  const expandedFilePaths = createMemo(() => {
+    const key = activeWorkspaceKey();
+    if (!key) return [] as string[];
+    return expandedFilePathsByWorkspace()[key] ?? [];
+  });
+  const canUseFileExplorer = createMemo(() => {
+    if (!isTauriRuntime()) return false;
+    if (props.activeWorkspaceDisplay.workspaceType === "remote") return false;
+    return Boolean(props.activeWorkspaceRoot.trim());
+  });
+  const fileExplorerUnavailableReason = createMemo(() => {
+    if (!isTauriRuntime()) return "File explorer is available in the desktop app.";
+    if (props.activeWorkspaceDisplay.workspaceType === "remote") {
+      return "File explorer is unavailable for remote workspaces.";
+    }
+    if (!props.activeWorkspaceRoot.trim()) return "Select a workspace to browse files.";
+    return "";
+  });
+  const toggleExpandedPath = (path: string) => {
+    const key = activeWorkspaceKey();
+    const trimmed = path.trim();
+    if (!key || !trimmed) return;
+    setExpandedFilePathsByWorkspace((current) => {
+      const list = current[key] ?? [];
+      const nextList = list.includes(trimmed)
+        ? list.filter((entry) => entry !== trimmed)
+        : [...list, trimmed];
+      return { ...current, [key]: nextList };
+    });
+  };
+  const handleSelectFile = (path: string) => {
+    const trimmed = path.trim();
+    if (!trimmed) return;
+    setSelectedFilePath(trimmed);
+    openMarkdownEditor(trimmed);
+  };
+
+  createEffect(
+    on(
+      () => props.activeWorkspaceId,
+      () => {
+        setSelectedFilePath(null);
+      },
+    ),
+  );
   const [workspaceMenuId, setWorkspaceMenuId] = createSignal<string | null>(null);
   let workspaceMenuRef: HTMLDivElement | undefined;
   const [shareWorkspaceId, setShareWorkspaceId] = createSignal<string | null>(null);
@@ -1409,6 +1506,16 @@ export default function DashboardView(props: DashboardViewProps) {
           </div>
         </Show>
 
+        <MarkdownEditorSidebar
+          open={markdownEditorOpen()}
+          path={markdownEditorPath()}
+          workspaceId={props.openworkServerWorkspaceId}
+          client={props.openworkServerClient}
+          workspaceRoot={props.activeWorkspaceRoot}
+          workspaceType={props.activeWorkspaceDisplay.workspaceType}
+          onClose={closeMarkdownEditor}
+        />
+
         <ProviderAuthModal
           open={props.providerAuthModalOpen}
           loading={props.providerAuthBusy}
@@ -1523,7 +1630,7 @@ export default function DashboardView(props: DashboardViewProps) {
         </nav>
       </main>
 
-      <aside class="w-56 hidden md:flex flex-col bg-dls-sidebar border-l border-dls-border p-4">
+      <aside class="w-64 hidden md:flex flex-col bg-dls-sidebar border-l border-dls-border p-4">
         <div class="flex items-center gap-1 rounded-lg border border-dls-border bg-dls-hover p-1 text-[11px] font-semibold text-dls-secondary">
           <button
             type="button"
@@ -1534,7 +1641,7 @@ export default function DashboardView(props: DashboardViewProps) {
             }`}
             onClick={() => setRightSidebarTab("work")}
           >
-            Work
+            工作区
           </button>
           <button
             type="button"
@@ -1545,7 +1652,7 @@ export default function DashboardView(props: DashboardViewProps) {
             }`}
             onClick={() => setRightSidebarTab("files")}
           >
-            项目目录
+            资源
           </button>
         </div>
 
@@ -1562,8 +1669,29 @@ export default function DashboardView(props: DashboardViewProps) {
         </Show>
 
         <Show when={rightSidebarTab() === "files"}>
-          <div class="pt-3 text-xs text-dls-secondary px-3">
-            Open a session to browse workspace files.
+          <div class="flex-1 overflow-y-auto pt-3">
+            <div class="rounded-xl border border-dls-border bg-dls-hover px-1 py-2">
+              <Show
+                when={canUseFileExplorer()}
+                fallback={
+                  <div class="px-3 py-2 text-xs text-dls-secondary">
+                    {fileExplorerUnavailableReason()}
+                  </div>
+                }
+              >
+                <Show when={props.activeWorkspaceRoot.trim()} keyed>
+                  {(workspacePath) => (
+                    <FileTree
+                      workspacePath={workspacePath}
+                      expandedPaths={expandedFilePaths()}
+                      selectedPath={selectedFilePath() ?? undefined}
+                      onToggleExpand={toggleExpandedPath}
+                      onSelectFile={handleSelectFile}
+                    />
+                  )}
+                </Show>
+              </Show>
+            </div>
           </div>
         </Show>
       </aside>

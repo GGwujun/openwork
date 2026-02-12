@@ -20,7 +20,7 @@ import type {
   WorkspaceSessionGroup,
 } from "../types";
 
-import type { EngineInfo, FileReadResult, OpenworkServerInfo, WorkspaceInfo } from "../lib/tauri";
+import type { EngineInfo, OpenworkServerInfo, WorkspaceInfo } from "../lib/tauri";
 
 import {
   Box,
@@ -56,7 +56,6 @@ import StatusBar from "../components/status-bar";
 import { buildOpenworkWorkspaceBaseUrl, createOpenworkServerClient } from "../lib/openwork-server";
 import type { OpenworkServerClient, OpenworkServerSettings, OpenworkServerStatus } from "../lib/openwork-server";
 import { join } from "@tauri-apps/api/path";
-import { fsReadFile } from "../lib/tauri";
 import { formatRelativeTime, isTauriRuntime, normalizeDirectoryPath, parseTemplateFrontmatter } from "../utils";
 
 import browserSetupTemplate from "../data/commands/browser-setup.md?raw";
@@ -68,9 +67,8 @@ import type { SidebarSectionState } from "../components/session/sidebar";
 import FlyoutItem from "../components/flyout-item";
 import QuestionModal from "../components/question-modal";
 import TouchedFilesPanel from "../components/session/touched-files-panel";
-import FileTree from "../components/file-tree";
-import FilePreview from "../components/file-preview";
 import MarkdownEditorSidebar from "../components/session/markdown-editor-sidebar";
+import FileTree from "../components/file-tree";
 
 export type SessionViewProps = {
   selectedSessionId: string | null;
@@ -233,16 +231,12 @@ export default function SessionView(props: SessionViewProps) {
 
   const [markdownEditorOpen, setMarkdownEditorOpen] = createSignal(false);
   const [markdownEditorPath, setMarkdownEditorPath] = createSignal<string | null>(null);
-
   const [rightSidebarTab, setRightSidebarTab] = createSignal<"work" | "files">("work");
   const [expandedFilePathsByWorkspace, setExpandedFilePathsByWorkspace] = createSignal<
     Record<string, string[]>
   >({});
   const [selectedFilePath, setSelectedFilePath] = createSignal<string | null>(null);
-  const [filePreviewContent, setFilePreviewContent] = createSignal<FileReadResult | null>(null);
-  const [filePreviewLoading, setFilePreviewLoading] = createSignal(false);
-  const [filePreviewError, setFilePreviewError] = createSignal<string | null>(null);
-  let previewRequestId = 0;
+
 
   // When a session is selected (i.e. we are in SessionView), the right sidebar is
   // navigation-only. Avoid showing any tab as "selected" to reduce confusion.
@@ -331,10 +325,6 @@ export default function SessionView(props: SessionViewProps) {
     const relative = toWorkspaceRelativeForApi(file);
     if (!relative) {
       setToastMessage("Only workspace-relative files can be opened here.");
-      return;
-    }
-    if (!/\.(md|mdx|markdown)$/i.test(relative)) {
-      setToastMessage("Only markdown files can be edited here right now.");
       return;
     }
     setMarkdownEditorPath(relative);
@@ -472,56 +462,22 @@ export default function SessionView(props: SessionViewProps) {
       return { ...current, [key]: nextList };
     });
   };
-  const clearFilePreview = () => {
-    previewRequestId += 1;
-    setSelectedFilePath(null);
-    setFilePreviewContent(null);
-    setFilePreviewError(null);
-    setFilePreviewLoading(false);
-  };
-  const handleSelectFile = async (path: string) => {
+  const handleSelectFile = (path: string) => {
     const trimmed = path.trim();
     if (!trimmed) return;
-    previewRequestId += 1;
-    const requestId = previewRequestId;
     setSelectedFilePath(trimmed);
-    setFilePreviewContent(null);
-    setFilePreviewError(null);
-
-    if (!canUseFileExplorer()) {
-      setFilePreviewLoading(false);
-      setFilePreviewError(fileExplorerUnavailableReason() || "File preview is unavailable.");
-      return;
-    }
-
-    setFilePreviewLoading(true);
-    try {
-      const content = await fsReadFile(trimmed, props.activeWorkspaceRoot);
-      if (requestId !== previewRequestId) return;
-      setFilePreviewContent(content);
-    } catch (error) {
-      if (requestId !== previewRequestId) return;
-      const message = error instanceof Error ? error.message : "Failed to load file";
-      setFilePreviewError(message);
-    } finally {
-      if (requestId === previewRequestId) {
-        setFilePreviewLoading(false);
-      }
-    }
+    openMarkdownEditor(trimmed);
   };
 
   createEffect(
     on(
       () => props.activeWorkspaceId,
       () => {
-        previewRequestId += 1;
         setSelectedFilePath(null);
-        setFilePreviewContent(null);
-        setFilePreviewError(null);
-        setFilePreviewLoading(false);
       },
     ),
   );
+
 
   createEffect(() => {
     if (!addWorkspaceMenuOpen()) return;
@@ -1985,19 +1941,6 @@ export default function SessionView(props: SessionViewProps) {
           ref={(el) => (chatContainerEl = el)}
         >
           <div class="max-w-5xl mx-auto w-full">
-          <Show when={selectedFilePath()} keyed>
-            {(path) => (
-              <div class="mb-6">
-                <FilePreview
-                  filePath={path}
-                  content={filePreviewContent()}
-                  loading={filePreviewLoading()}
-                  error={filePreviewError()}
-                  onClose={clearFilePreview}
-                />
-              </div>
-            )}
-          </Show>
           <Show when={props.messages.length === 0}>
             <div class="text-center py-16 px-6 space-y-6">
               <div class="w-16 h-16 bg-dls-hover rounded-3xl mx-auto flex items-center justify-center border border-dls-border">
@@ -2328,7 +2271,7 @@ export default function SessionView(props: SessionViewProps) {
         />
       </main>
 
-      <aside class="w-56 hidden md:flex flex-col bg-dls-sidebar border-l border-dls-border p-4">
+      <aside class="w-64 hidden md:flex flex-col bg-dls-sidebar border-l border-dls-border p-4">
         <div class="flex items-center gap-1 rounded-lg border border-dls-border bg-dls-hover p-1 text-[11px] font-semibold text-dls-secondary">
           <button
             type="button"
@@ -2339,7 +2282,7 @@ export default function SessionView(props: SessionViewProps) {
             }`}
             onClick={() => setRightSidebarTab("work")}
           >
-            Work
+            工作区
           </button>
           <button
             type="button"
@@ -2350,7 +2293,7 @@ export default function SessionView(props: SessionViewProps) {
             }`}
             onClick={() => setRightSidebarTab("files")}
           >
-            项目目录
+            资源
           </button>
         </div>
 
@@ -2561,6 +2504,8 @@ export default function SessionView(props: SessionViewProps) {
         path={markdownEditorPath()}
         workspaceId={props.openworkServerWorkspaceId}
         client={props.openworkServerClient}
+        workspaceRoot={props.activeWorkspaceRoot}
+        workspaceType={props.activeWorkspaceDisplay.workspaceType}
         onClose={closeMarkdownEditor}
         onToast={(message) => setToastMessage(message)}
       />
