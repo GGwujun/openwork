@@ -11,7 +11,7 @@ Unified entry point for all Forge work. One skill handles:
 - First-time setup (skeleton + optional tutorial)
 - Structure validation
 - Active tracks detection
-- Transition to brainstorming or continuing work
+- Transition to planning or continuing work
 
 **Core principle:** Single entry, smart defaults, minimal friction.
 
@@ -20,11 +20,11 @@ Unified entry point for all Forge work. One skill handles:
 ```
 forge/ exists? 
 ├── No → Create skeleton → Ask "5-min tutorial?" 
-│       ├── YES: Mini tutorial → brainstorming
-│       └── NO: Directly to brainstorming  
+│       ├── YES: Mini tutorial → forge-plan
+│       └── NO: Directly to forge-plan  
 └── Yes → Active tracks?
     ├── Yes → Show tracks → Ask "Continue, archive, or new?"
-    └── No → Directly to brainstorming
+    └── No → Directly to forge-plan
 ```
 
 ## The Flow
@@ -81,7 +81,7 @@ Active tracks in this project:
 What would you like to do?
 1. Continue auth-refactor → Use forge:executing-plans
 2. Archive completed tracks → Use forge:forge-archive  
-3. Start a new change → Use forge:brainstorming
+3. Start a new change → Use forge-plan
 ```
 
 ### Step 3: Mini Tutorial (Optional, 5 min)
@@ -103,8 +103,7 @@ Walk through a concrete 3-line code change:
 **Summary (1 min):**
 ```
 Your workflow:
-forge-start → brainstorming → git-worktrees → writing-plans → 
-executing-plans → verification → archive
+forge-start → forge-plan → forge-execute → verification → archive
 ```
 
 ### Step 4: Transition to Work
@@ -113,7 +112,7 @@ Always end with clear handoff:
 
 | Scenario | Handoff |
 |----------|---------|
-| New change | "Using forge:brainstorming to explore your idea" |
+| New change | "Using forge-plan to create design and tasks" |
 | Continue track | "Using forge:executing-plans to continue implementation" |
 | Archive | "Using forge:forge-archive to complete and clean up" |
 
@@ -136,7 +135,7 @@ forge/
 | You want to... | Entry Point |
 |----------------|-------------|
 | Start completely fresh | `forge-start` → Initialize → Optional tutorial |
-| Start new feature | `forge-start` → brainstorming |
+| Start new feature | `forge-start` → forge-plan |
 | Continue existing work | `forge-start` → Select track → executing-plans |
 | Check project status | `forge-start` (shows status, offers actions) |
 
@@ -152,10 +151,9 @@ forge/
 ## Integration
 
 **Leads to:**
-- `forge:brainstorming` — For new changes (idea exploration and design)
-- `forge:using-git-worktrees` — Create isolated workspace for implementation
-- `forge:writing-plans` — Create detailed implementation plan
-- `forge:executing-plans` — Execute plan task by task
+- `forge-plan` — For new changes (design + tasks)
+- `forge-contracts` — Create or sync delta contracts for a track
+- `forge-execute` — Set up execution stage and choose run mode
 - `forge:forge-archive` — Complete and archive finished work
 
 **Prerequisites:**
@@ -198,7 +196,7 @@ User: Yes
 
 AI: [Delivers tutorial]
 
-AI: Ready to explore your feature idea. Using forge:brainstorming...
+AI: Ready to plan your feature. Using forge-plan...
 ```
 
 ### Returning User with Active Work
@@ -225,5 +223,5 @@ AI: [Running forge-start]
 
 AI: Forge structure ready, no active tracks.
 
-AI: Using forge:brainstorming to explore the login bug fix...
+AI: Using forge-plan to plan the login bug fix...
 ```

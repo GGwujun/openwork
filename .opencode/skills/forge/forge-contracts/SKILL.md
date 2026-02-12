@@ -11,6 +11,8 @@ Manage contract artifacts for a track: create missing delta contracts or sync th
 
 **Core principle:** Preserve existing contracts unless explicitly changed by delta.
 
+**Prerequisite:** Run `forge-start` before working on a track.
+
 ## When to Use
 
 - A track needs delta contracts created

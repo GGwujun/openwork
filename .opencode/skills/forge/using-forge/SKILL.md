@@ -72,10 +72,10 @@ These thoughts mean STOP—you're rationalizing:
 
 When multiple skills could apply, use this order:
 
-1. **Process skills first** (brainstorming, debugging) - these determine HOW to approach the task
+1. **Process skills first** (planning, debugging) - these determine HOW to approach the task
 2. **Implementation skills second** (frontend-design, mcp-builder) - these guide execution
 
-"Let's build X" → brainstorming first, then implementation skills.
+"Let's build X" → planning first, then implementation skills.
 "Fix this bug" → debugging first, then domain-specific skills.
 
 ## Skill Types
@@ -98,14 +98,11 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 
 **Mainline (skill-only):**
 - **REQUIRED SUB-SKILL:** forge-start
-- **REQUIRED SUB-SKILL:** forge:brainstorming
-- **REQUIRED SUB-SKILL:** forge:using-git-worktrees
-- **REQUIRED SUB-SKILL:** forge:writing-plans
-- **REQUIRED SUB-SKILL:** forge:subagent-driven-development or forge:executing-plans
+- **REQUIRED SUB-SKILL:** forge-plan
+- **REQUIRED SUB-SKILL:** forge-execute
 - **REQUIRED SUB-SKILL:** forge:test-driven-development
 - **REQUIRED SUB-SKILL:** forge:requesting-code-review
-- **REQUIRED SUB-SKILL:** forge:forge-verify
-- **REQUIRED SUB-SKILL:** forge:verification-before-completion
+- **REQUIRED SUB-SKILL:** forge:forge-verify (includes verification-before-completion gate)
 - **REQUIRED SUB-SKILL:** forge:forge-archive
 - **REQUIRED SUB-SKILL:** forge:finishing-a-development-branch
 
@@ -135,7 +132,7 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 - "Design is wrong but I'll push through."
 
 **Forge optional skills:**
-- forge:forge-continue (create next artifact)
-- forge:forge-sync-contracts (merge delta contracts)
-- forge:forge-bulk-archive (archive multiple tracks)
+- forge-contracts (create or sync delta contracts)
+- forge-archive (multi-track mode)
 - forge:forge-start (optional onboarding built-in)
+- openwork-docker-chrome-mcp (required for user-facing changes)
