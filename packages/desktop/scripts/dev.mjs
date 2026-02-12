@@ -11,7 +11,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(__dirname, '..');
 
 // Get PORT from environment or default to 5173
-const port = process.env.PORT || '5173';
+const port = process.env.PORT || '5177';
 const devUrl = `http://localhost:${port}`;
 
 console.log(`Starting Tauri dev server on ${devUrl}...`);
