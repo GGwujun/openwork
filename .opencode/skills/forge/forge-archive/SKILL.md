@@ -28,6 +28,17 @@ Archiving finalizes a change by merging delta contracts into the main contracts 
 3. Move `forge/tracks/<change>/` to `forge/archives/YYYY-MM-DD-<change>/`
 4. Ensure main contracts now represent the new behavior
 
+## Multi-Track Mode
+
+If multiple tracks are ready to archive, use this skill as the entry point and follow the multi-track flow:
+
+1. List `forge/tracks/` and prompt for multi-select
+2. Detect contract conflicts by domain
+3. Resolve conflicts using implementation evidence
+4. Archive each selected track in resolved order
+
+If the workflow explicitly requires the legacy bulk skill, use `forge-bulk-archive`.
+
 ## Delta Sections
 
 - `## ADDED` introduces new requirements
