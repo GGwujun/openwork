@@ -46,6 +46,7 @@ import {
   pickDirectory,
   saveFile,
   workspaceBootstrap,
+  workspaceCloneRepo,
   workspaceCreate,
   workspaceCreateRemote,
   workspaceExportConfig,
@@ -1277,14 +1278,19 @@ export function createWorkspaceStore(options: {
     }
   }
 
-  async function createWorkspaceFlow(preset: WorkspacePreset, folder: string | null) {
+  async function createWorkspaceFlow(
+    preset: WorkspacePreset,
+    folder: string | null,
+    repoUrl: string | null,
+  ) {
     if (!isTauriRuntime()) {
       options.setError(t("app.error.tauri_required", currentLocale()));
       return;
     }
 
-    if (!folder) {
-      options.setError(t("app.error.choose_folder", currentLocale()));
+    const repo = repoUrl?.trim() ?? "";
+    if (!folder && !repo) {
+      options.setError(t("app.error.choose_folder_or_repo", currentLocale()));
       return;
     }
 
@@ -1294,10 +1300,17 @@ export function createWorkspaceStore(options: {
     options.setError(null);
 
     try {
-      const resolvedFolder = await resolveWorkspacePath(folder);
-      if (!resolvedFolder) {
-        options.setError(t("app.error.choose_folder", currentLocale()));
-        return;
+      let resolvedFolder = "";
+      if (repo) {
+        const clone = await workspaceCloneRepo({ repoUrl: repo });
+        resolvedFolder = clone.path;
+      } else {
+        const resolved = await resolveWorkspacePath(folder);
+        if (!resolved) {
+          options.setError(t("app.error.choose_folder", currentLocale()));
+          return;
+        }
+        resolvedFolder = resolved;
       }
 
       const name = resolvedFolder.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "Workspace";
@@ -1328,14 +1341,19 @@ export function createWorkspaceStore(options: {
     }
   }
 
-  async function createSandboxFlow(preset: WorkspacePreset, folder: string | null) {
+  async function createSandboxFlow(
+    preset: WorkspacePreset,
+    folder: string | null,
+    repoUrl: string | null,
+  ) {
     if (!isTauriRuntime()) {
       options.setError(t("app.error.tauri_required", currentLocale()));
       return;
     }
 
-    if (!folder) {
-      options.setError(t("app.error.choose_folder", currentLocale()));
+    const repo = repoUrl?.trim() ?? "";
+    if (!folder && !repo) {
+      options.setError(t("app.error.choose_folder_or_repo", currentLocale()));
       return;
     }
 
@@ -1376,12 +1394,19 @@ export function createWorkspaceStore(options: {
     options.setError(null);
 
     try {
-      const resolvedFolder = await resolveWorkspacePath(folder);
-      if (!resolvedFolder) {
-        options.setError(t("app.error.choose_folder", currentLocale()));
-        setSandboxStep("workspace", { status: "error", detail: "No folder selected" });
-        setSandboxError("No folder selected");
-        return;
+      let resolvedFolder = "";
+      if (repo) {
+        const clone = await workspaceCloneRepo({ repoUrl: repo });
+        resolvedFolder = clone.path;
+      } else {
+        const resolved = await resolveWorkspacePath(folder);
+        if (!resolved) {
+          options.setError(t("app.error.choose_folder", currentLocale()));
+          setSandboxStep("workspace", { status: "error", detail: "No folder selected" });
+          setSandboxError("No folder selected");
+          return;
+        }
+        resolvedFolder = resolved;
       }
 
       const name = resolvedFolder.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "Workspace";

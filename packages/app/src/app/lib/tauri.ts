@@ -130,6 +130,11 @@ export type WorkspaceList = {
   workspaces: WorkspaceInfo[];
 };
 
+export type WorkspaceCloneResult = {
+  path: string;
+  cloned: boolean;
+};
+
 export type WorkspaceExportSummary = {
   outputPath: string;
   included: number;
@@ -165,6 +170,12 @@ export async function workspaceCreate(input: {
     folderPath: input.folderPath,
     name: input.name,
     preset: input.preset,
+  });
+}
+
+export async function workspaceCloneRepo(input: { repoUrl: string }): Promise<WorkspaceCloneResult> {
+  return invoke<WorkspaceCloneResult>("workspace_clone_repo", {
+    repoUrl: input.repoUrl,
   });
 }
 
