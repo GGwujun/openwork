@@ -309,6 +309,8 @@ export default function DashboardView(props: DashboardViewProps) {
         : "Remote"
       : "Local";
 
+  const [rightSidebarTab, setRightSidebarTab] = createSignal<"work" | "files">("work");
+
   const openSessionFromList = (workspaceId: string, sessionId: string) => {
     // For same-workspace clicks, just select the session without workspace activation
     if (workspaceId === props.activeWorkspaceId) {
@@ -1522,15 +1524,48 @@ export default function DashboardView(props: DashboardViewProps) {
       </main>
 
       <aside class="w-56 hidden md:flex flex-col bg-dls-sidebar border-l border-dls-border p-4">
-        <div class="space-y-1 pt-2">
-          {navItem("scheduled", "Automations", <History size={18} />)}
-          {navItem("task-center", "Task Center", <ClipboardList size={18} />)}
-          {navItem("skills", "Skills", <Zap size={18} />)}
-          {navItem("plugins", "Plugins", <Cpu size={18} />)}
-          {navItem("mcp", "Apps", <Box size={18} />)}
-          {navItem("identities", "Identities", <MessageCircle size={18} />)}
-          {navItem("config", "Config", <SlidersHorizontal size={18} />)}
+        <div class="flex items-center gap-1 rounded-lg border border-dls-border bg-dls-hover p-1 text-[11px] font-semibold text-dls-secondary">
+          <button
+            type="button"
+            class={`flex-1 rounded-md px-2 py-1.5 transition-colors ${
+              rightSidebarTab() === "work"
+                ? "bg-dls-active text-dls-text"
+                : "hover:bg-dls-active/60 hover:text-dls-text"
+            }`}
+            onClick={() => setRightSidebarTab("work")}
+          >
+            Work
+          </button>
+          <button
+            type="button"
+            class={`flex-1 rounded-md px-2 py-1.5 transition-colors ${
+              rightSidebarTab() === "files"
+                ? "bg-dls-active text-dls-text"
+                : "hover:bg-dls-active/60 hover:text-dls-text"
+            }`}
+            onClick={() => setRightSidebarTab("files")}
+          >
+            项目目录
+          </button>
         </div>
+
+        <Show when={rightSidebarTab() === "work"}>
+          <div class="space-y-1 pt-3">
+            {navItem("scheduled", "Automations", <History size={18} />)}
+            {navItem("task-center", "Task Center", <ClipboardList size={18} />)}
+            {navItem("skills", "Skills", <Zap size={18} />)}
+            {navItem("plugins", "Plugins", <Cpu size={18} />)}
+            {navItem("mcp", "Apps", <Box size={18} />)}
+            {navItem("identities", "Identities", <MessageCircle size={18} />)}
+            {navItem("config", "Config", <SlidersHorizontal size={18} />)}
+          </div>
+        </Show>
+
+        <Show when={rightSidebarTab() === "files"}>
+          <div class="pt-3 text-xs text-dls-secondary px-3">
+            Open a session to browse workspace files.
+          </div>
+        </Show>
       </aside>
     </div>
   );
