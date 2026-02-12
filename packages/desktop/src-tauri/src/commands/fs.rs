@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const MAX_PREVIEW_SIZE: u64 = 1024 * 1024; // 1MB
 const HIDDEN_PREFIXES: &[&str] = &[".", "node_modules", "target", "dist", "build"];
@@ -21,22 +21,56 @@ pub struct FileReadResult {
     pub language: Option<String>,
 }
 
+fn normalize_path(path: &Path) -> Result<PathBuf, String> {
+    std::fs::canonicalize(path).map_err(|e| format!("Failed to resolve path: {e}"))
+}
+
+fn ensure_path_allowed(path: &Path, workspace_root: &Path) -> Result<(), String> {
+    if !workspace_root.exists() {
+        return Err("Workspace root does not exist".to_string());
+    }
+    if !workspace_root.is_dir() {
+        return Err("Workspace root is not a directory".to_string());
+    }
+
+    let root = normalize_path(workspace_root)?;
+    let target = normalize_path(path)?;
+
+    if !target.starts_with(&root) {
+        return Err("Path is outside workspace".to_string());
+    }
+
+    Ok(())
+}
+
 /// 读取目录内容
 #[tauri::command]
-pub async fn fs_read_dir(path: String) -> Result<Vec<FileEntry>, String> {
+pub async fn fs_read_dir(path: String, workspace_root: String) -> Result<Vec<FileEntry>, String> {
+    let workspace_root = workspace_root.trim();
+    if workspace_root.is_empty() {
+        return Err("workspace_root is required".to_string());
+    }
+
     let path_obj = Path::new(&path);
+    let resolved_path = if path_obj.is_absolute() {
+        path_obj.to_path_buf()
+    } else {
+        Path::new(workspace_root).join(path_obj)
+    };
+
+    ensure_path_allowed(&resolved_path, Path::new(workspace_root))?;
     
-    if !path_obj.exists() {
-        return Err(format!("Path does not exist: {}", path));
+    if !resolved_path.exists() {
+        return Err(format!("Path does not exist: {}", resolved_path.display()));
     }
     
-    if !path_obj.is_dir() {
-        return Err(format!("Path is not a directory: {}", path));
+    if !resolved_path.is_dir() {
+        return Err(format!("Path is not a directory: {}", resolved_path.display()));
     }
     
     let mut entries = Vec::new();
     
-    match std::fs::read_dir(path_obj) {
+    match std::fs::read_dir(&resolved_path) {
         Ok(dir_entries) => {
             for entry_result in dir_entries {
                 match entry_result {
@@ -98,19 +132,31 @@ pub async fn fs_read_dir(path: String) -> Result<Vec<FileEntry>, String> {
 
 /// 读取文件内容
 #[tauri::command]
-pub async fn fs_read_file(path: String) -> Result<FileReadResult, String> {
+pub async fn fs_read_file(path: String, workspace_root: String) -> Result<FileReadResult, String> {
+    let workspace_root = workspace_root.trim();
+    if workspace_root.is_empty() {
+        return Err("workspace_root is required".to_string());
+    }
+
     let path_obj = Path::new(&path);
+    let resolved_path = if path_obj.is_absolute() {
+        path_obj.to_path_buf()
+    } else {
+        Path::new(workspace_root).join(path_obj)
+    };
+
+    ensure_path_allowed(&resolved_path, Path::new(workspace_root))?;
     
-    if !path_obj.exists() {
-        return Err(format!("File does not exist: {}", path));
+    if !resolved_path.exists() {
+        return Err(format!("File does not exist: {}", resolved_path.display()));
     }
     
-    if !path_obj.is_file() {
-        return Err(format!("Path is not a file: {}", path));
+    if !resolved_path.is_file() {
+        return Err(format!("Path is not a file: {}", resolved_path.display()));
     }
     
     // 检查文件大小
-    let metadata = match std::fs::metadata(path_obj) {
+    let metadata = match std::fs::metadata(&resolved_path) {
         Ok(m) => m,
         Err(e) => return Err(format!("Failed to read file metadata: {}", e)),
     };
@@ -125,12 +171,12 @@ pub async fn fs_read_file(path: String) -> Result<FileReadResult, String> {
     }
     
     // 检测是否为二进制文件
-    if is_binary_file(path_obj) {
+    if is_binary_file(&resolved_path) {
         return Err("Binary files cannot be previewed".to_string());
     }
     
     // 读取文件内容
-    let content = match std::fs::read_to_string(path_obj) {
+    let content = match std::fs::read_to_string(&resolved_path) {
         Ok(c) => c,
         Err(e) => {
             if e.kind() == std::io::ErrorKind::InvalidData {
@@ -141,7 +187,7 @@ pub async fn fs_read_file(path: String) -> Result<FileReadResult, String> {
     };
     
     // 检测语言
-    let language = detect_language(path_obj);
+    let language = detect_language(&resolved_path);
     
     Ok(FileReadResult {
         content,
