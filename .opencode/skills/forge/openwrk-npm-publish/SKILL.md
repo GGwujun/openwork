@@ -1,7 +1,7 @@
 ---
 name: openwrk-npm-publish
 description: |
-  Publish the openwrk npm package with clean git hygiene.
+  Use when manual recovery or one-off openwrk npm publishing is required; otherwise use `release`.
 
   Triggers when user mentions:
   - "openwrk npm publish"
@@ -12,14 +12,7 @@ description: |
 ## Quick usage (already configured)
 
 1. Ensure you are on the default branch and the tree is clean.
-2. Bump versions via the shared release bump (this keeps `openwrk` aligned with the app/desktop release).
-
-```bash
-pnpm bump:patch
-# or: pnpm bump:minor
-# or: pnpm bump:major
-# or: pnpm bump:set -- X.Y.Z
-```
+2. Bump versions via `release` to keep `openwrk` aligned with app/desktop versions.
 
 3. Commit the bump.
 4. Preferred: publish via the "Release App" GitHub Actions workflow by tagging `vX.Y.Z`.

@@ -1,6 +1,6 @@
 ---
 title: Release flow
-description: Step through versioning, tagging, and verification
+description: Use when preparing an OpenWork release (versioning, tagging, and verification)
 name: release
 ---
 
@@ -52,3 +52,9 @@ Confirm the run and the published release.
 gh run list --repo different-ai/openwork --workflow "Release App" --limit 5
 gh release view vX.Y.Z --repo different-ai/openwork
 ```
+
+---
+
+## openwrk npm publish (recovery path)
+
+If the Release App workflow did not publish `openwrk`, use `openwrk-npm-publish` for the manual recovery steps.
