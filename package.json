@@ -33,10 +33,14 @@
     "release:ship:watch": "node scripts/release/ship.mjs --watch",
     "tauri": "pnpm --filter @different-ai/openwork exec tauri"
   },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  },
   "pnpm": {
     "onlyBuiltDependencies": [
       "@whiskeysockets/baileys",
       "better-sqlite3",
+      "cross-env",
       "esbuild",
       "protobufjs"
     ],

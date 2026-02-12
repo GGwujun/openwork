@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import solid from "vite-plugin-solid";
 
 const portValue = Number.parseInt(process.env.PORT ?? "", 10);
-const devPort = Number.isFinite(portValue) && portValue > 0 ? portValue : 5173;
+const devPort = Number.isFinite(portValue) && portValue > 0 ? portValue : 5177;
 const allowedHosts = new Set<string>();
 const envAllowedHosts = process.env.VITE_ALLOWED_HOSTS ?? "";
 

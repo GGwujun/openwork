@@ -3677,8 +3677,15 @@ export default function App() {
       let rawResult: Awaited<ReturnType<typeof c.session.create>>;
       try {
         mark("creating session");
+        const rawRoot = workspaceStore.activeWorkspaceRoot().trim();
+        const directory = (() => {
+          if (!rawRoot) return rawRoot;
+          const unified = rawRoot.replace(/\\/g, "/");
+          const withoutTrailing = unified.replace(/\/+$/, "");
+          return withoutTrailing || "/";
+        })();
         rawResult = await c.session.create({
-          directory: workspaceStore.activeWorkspaceRoot().trim(),
+          directory,
         });
         mark("session created");
       } catch (createErr) {
@@ -4832,6 +4839,9 @@ export default function App() {
     }
 
     if (path.startsWith("/session")) {
+      if (creatingSession()) {
+        return;
+      }
       const [, , sessionSegment] = rawPath.split("/");
       const id = (sessionSegment ?? "").trim();
 
