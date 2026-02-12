@@ -11,6 +11,8 @@ Verify that implementation matches Forge artifacts with a three-dimension report
 
 **Core principle:** Evidence-driven verification before archive.
 
+**Prerequisite:** Apply `verification-before-completion` before any "Ready" claim in the report.
+
 ## When to Use
 
 - Before archiving a Forge change

@@ -39,6 +39,8 @@ Stop. Don't proceed to Step 2.
 
 **If tests pass:** Continue to Step 2.
 
+**If the change is user-facing:** Run `openwork-docker-chrome-mcp` before presenting options.
+
 ### Step 2: Determine Base Branch
 
 ```bash
