@@ -233,9 +233,12 @@ Done!
 
 **Required workflow skills:**
 - **forge:using-git-worktrees** - REQUIRED: Set up isolated workspace before starting
-- **forge:writing-plans** - Creates the plan this skill executes
+- **forge-plan** - Creates the plan this skill executes (design + tasks)
 - **forge:requesting-code-review** - Code review template for reviewer subagents
 - **forge:finishing-a-development-branch** - Complete development after all tasks
+
+**Typical entry:**
+- `forge-execute` (routes to this skill for same-session execution)
 
 **Subagents should use:**
 - **forge:test-driven-development** - Subagents follow TDD for each task

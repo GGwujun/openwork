@@ -11,6 +11,8 @@ Turn a change idea into a ready-to-execute plan by producing design and tasks ar
 
 **Core principle:** Clarity before execution.
 
+**Prerequisite:** Run `forge-start` before planning a new change.
+
 ## When to Use
 
 - Starting a new change after `forge-start`
@@ -46,7 +48,7 @@ Turn a change idea into a ready-to-execute plan by producing design and tasks ar
 | No delta contracts | Run `forge-contracts` to create them |
 | Missing design | Create `design.md` |
 | Missing tasks | Create `tasks.md` |
-| Tasks already complete | Stop; hand off to execution |
+| Tasks already complete | Stop; hand off to `forge-execute` |
 
 ## Example
 
@@ -58,7 +60,7 @@ Created:
 - design.md (rate limit per IP, storage, errors)
 - tasks.md (tests → minimal code → verify)
 
-Next: choose execution method
+Next: use forge-execute
 ```
 
 ## Common Mistakes
@@ -69,5 +71,4 @@ Next: choose execution method
 
 ## Next Steps
 
-- Choose execution: `forge:subagent-driven-development` or `forge:executing-plans`
-- If implementation will run now, use `forge:using-git-worktrees` first
+- Use `forge-execute` to set up worktree and select execution mode

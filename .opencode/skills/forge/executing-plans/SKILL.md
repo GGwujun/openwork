@@ -82,5 +82,8 @@ After all tasks complete and verified:
 
 **Required workflow skills:**
 - **forge:using-git-worktrees** - REQUIRED: Set up isolated workspace before starting
-- **forge:writing-plans** - Creates the plan this skill executes
+- **forge-plan** - Creates the plan this skill executes (design + tasks)
 - **forge:finishing-a-development-branch** - Complete development after all tasks
+
+**Typical entry:**
+- `forge-execute` (routes to this skill for batch execution)
