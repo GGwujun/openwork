@@ -1,4 +1,7 @@
 import type { WorkspaceInfo } from "../lib/tauri";
+import { Show, createMemo, createSignal, onMount } from "solid-js";
+import { appDataDir } from "@tauri-apps/api/path";
+import { isTauriRuntime } from "../utils";
 
 import { t, currentLocale } from "../../i18n";
 
@@ -17,12 +20,38 @@ export default function WorkspaceChip(props: {
   onClick: () => void;
   connecting?: boolean;
 }) {
+  const [appDataRoot, setAppDataRoot] = createSignal<string | null>(null);
+  const normalizePath = (value: string) => String(value ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+  const gitWorkspaceRoot = createMemo(() => {
+    const base = appDataRoot();
+    if (!base) return "";
+    return `${base}/.workspaces`;
+  });
+  const isGitWorkspace = createMemo(() => {
+    if (props.workspace.workspaceType === "remote") return false;
+    const path = normalizePath(props.workspace.path ?? "").toLowerCase();
+    if (!path) return false;
+    if (path.includes("/.workspaces/")) return true;
+    const root = gitWorkspaceRoot();
+    if (!root) return false;
+    return path.startsWith(`${root}/`);
+  });
   const Icon = iconForWorkspace(props.workspace.preset, props.workspace.workspaceType);
   const subtitle = () =>
     props.workspace.workspaceType === "remote"
       ? props.workspace.baseUrl ?? props.workspace.path
       : props.workspace.path;
   const translate = (key: string) => t(key, currentLocale());
+
+  onMount(() => {
+    if (!isTauriRuntime()) return;
+    appDataDir()
+      .then((dir) => {
+        const normalized = normalizePath(dir).toLowerCase();
+        if (normalized) setAppDataRoot(normalized);
+      })
+      .catch(() => undefined);
+  });
 
   return (
     <button
@@ -43,11 +72,16 @@ export default function WorkspaceChip(props: {
           <span class="text-xs font-medium text-gray-12 leading-none truncate max-w-[9.5rem]">
             {props.workspace.name}
           </span>
-          {props.workspace.workspaceType === "remote" ? (
+          <Show when={props.workspace.workspaceType === "remote"}>
             <span class="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-gray-4 text-gray-11">
               {translate("dashboard.remote")}
             </span>
-          ) : null}
+          </Show>
+          <Show when={props.workspace.workspaceType !== "remote" && isGitWorkspace()}>
+            <span class="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-emerald-4 text-emerald-11">
+              Repo
+            </span>
+          </Show>
         </div>
         <span class="text-[10px] text-gray-10 font-mono leading-none max-w-[120px] truncate">
           {subtitle()}

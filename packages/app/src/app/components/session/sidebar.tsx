@@ -1,8 +1,10 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { Check, ChevronDown, GripVertical, Loader2, Plus, RefreshCcw, Settings, Square, Trash2 } from "lucide-solid";
 
 import type { TodoItem, WorkspaceConnectionState } from "../../types";
 import type { WorkspaceInfo } from "../../lib/tauri";
+import { appDataDir } from "@tauri-apps/api/path";
+import { isTauriRuntime } from "../../utils";
 
 type SessionSummary = {
   id: string;
@@ -82,7 +84,24 @@ export default function SessionSidebar(props: SidebarProps) {
     Record<string, boolean>
   >({});
   const [addWorkspaceMenuOpen, setAddWorkspaceMenuOpen] = createSignal(false);
+  const [appDataRoot, setAppDataRoot] = createSignal<string | null>(null);
   let addWorkspaceMenuRef: HTMLDivElement | undefined;
+
+  const normalizePath = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "");
+  const gitWorkspaceRoot = createMemo(() => {
+    const base = appDataRoot();
+    if (!base) return "";
+    return `${base}/.workspaces`;
+  });
+  const isGitWorkspace = (workspace: WorkspaceInfo) => {
+    if (workspace.workspaceType === "remote") return false;
+    const path = normalizePath(workspace.path ?? "").toLowerCase();
+    if (!path) return false;
+    if (path.includes("/.workspaces/")) return true;
+    const root = gitWorkspaceRoot();
+    if (!root) return false;
+    return path.startsWith(`${root}/`);
+  };
 
   const workspaceLabel = (workspace: WorkspaceInfo) =>
     workspace.displayName?.trim() ||
@@ -274,6 +293,16 @@ export default function SessionSidebar(props: SidebarProps) {
     onCleanup(() => window.removeEventListener("click", closeMenu));
   });
 
+  onMount(() => {
+    if (!isTauriRuntime()) return;
+    appDataDir()
+      .then((dir) => {
+        const normalized = normalizePath(dir).toLowerCase();
+        if (normalized) setAppDataRoot(normalized);
+      })
+      .catch(() => undefined);
+  });
+
   return (
     <div class="flex flex-col h-full overflow-hidden">
       <div class="px-4 pt-4 shrink-0">
@@ -361,6 +390,11 @@ export default function SessionSidebar(props: SidebarProps) {
                                 <Show when={group.workspace.workspaceType === "remote"}>
                                   <span class="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-gray-3 text-gray-11">
                                     {group.workspace.sandboxContainerName?.trim() ? "Sandbox" : "Remote"}
+                                  </span>
+                                </Show>
+                                <Show when={isGitWorkspace(group.workspace)}>
+                                  <span class="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-emerald-3 text-emerald-11">
+                                    Repo
                                   </span>
                                 </Show>
                               </div>

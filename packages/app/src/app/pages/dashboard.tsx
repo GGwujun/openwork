@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import type {
   DashboardTab,
   McpServerEntry,
@@ -18,6 +18,7 @@ import type {
 } from "../types";
 import type { ParsedTask } from "../lib/tasks-parser";
 import type { McpDirectoryInfo } from "../constants";
+import { appDataDir } from "@tauri-apps/api/path";
 import { formatRelativeTime, isTauriRuntime, normalizeDirectoryPath } from "../utils";
 import { buildOpenworkWorkspaceBaseUrl, createOpenworkServerClient } from "../lib/openwork-server";
 import type {
@@ -306,12 +307,40 @@ export default function DashboardView(props: DashboardViewProps) {
     workspace.name?.trim() ||
     workspace.path?.trim() ||
     "Workspace";
+  const [appDataRoot, setAppDataRoot] = createSignal<string | null>(null);
+  const normalizePath = (value: string) => String(value ?? "").replace(/\\/g, "/").replace(/\/+$/, "");
+  const gitWorkspaceRoot = createMemo(() => {
+    const base = appDataRoot();
+    if (!base) return "";
+    return `${base}/.workspaces`;
+  });
+  const isGitWorkspace = (workspace: WorkspaceInfo) => {
+    if (workspace.workspaceType === "remote") return false;
+    const path = normalizePath(workspace.path ?? "").toLowerCase();
+    if (!path) return false;
+    if (path.includes("/.workspaces/")) return true;
+    const root = gitWorkspaceRoot();
+    if (!root) return false;
+    return path.startsWith(`${root}/`);
+  };
   const workspaceKindLabel = (workspace: WorkspaceInfo) =>
     workspace.workspaceType === "remote"
       ? workspace.sandboxContainerName?.trim()
         ? "Sandbox"
         : "Remote"
-      : "Local";
+      : isGitWorkspace(workspace)
+        ? "Repo"
+        : "Local";
+
+  onMount(() => {
+    if (!isTauriRuntime()) return;
+    appDataDir()
+      .then((dir) => {
+        const normalized = normalizePath(dir).toLowerCase();
+        if (normalized) setAppDataRoot(normalized);
+      })
+      .catch(() => undefined);
+  });
 
   const [markdownEditorOpen, setMarkdownEditorOpen] = createSignal(false);
   const [markdownEditorPath, setMarkdownEditorPath] = createSignal<string | null>(null);
