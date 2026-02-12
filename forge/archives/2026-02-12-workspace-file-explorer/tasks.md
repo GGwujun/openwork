@@ -10,12 +10,12 @@ Last updated: 2026-02-11
   - [x] Filter hidden files and binary files
   - [x] Error handling
 
-- [ ] **Task 1.2**: Add file reading command
+- [x] **Task 1.2**: Add file reading command
   - [x] Implement `FileReadResult` struct
   - [x] Implement `fs_read_file` command
   - [x] Add language detection utility
   - [x] Add file size limits
-  - [ ] Security: path validation
+  - [x] Security: path validation
 
 - [x] **Task 1.3**: Register commands in `lib.rs`
   - [x] Add `mod commands::fs;`
@@ -61,19 +61,20 @@ Last updated: 2026-02-11
   - [x] Add `selectedFilePath` state
   - [x] Add `filePreviewContent` state
 
-- [x] **Task 4.2**: Add secondary tab switch
-  - [x] Modify workspace item rendering
-  - [x] Add `[Sessions] [Files]` toggle buttons
-  - [x] Connect to state
+- [x] **Task 4.2**: Add right-side tab switch (Work / 项目目录)
+  - [x] Convert right panel to Tab layout
+  - [x] Work Tab keeps existing right-side content
+  - [x] Add 项目目录 Tab for file tree
+  - [x] Connect tab state
 
-- [x] **Task 4.3**: Integrate FileTree
-  - [x] Render FileTree when Files tab selected
+- [x] **Task 4.3**: Integrate FileTree in 项目目录 Tab
+  - [x] Render FileTree when 项目目录 Tab selected
   - [x] Pass workspace path
   - [x] Handle file selection
 
 - [x] **Task 4.4**: Integrate FilePreview
   - [x] Show FilePreview in main content area
-  - [x] Load file content on selection
+  - [x] Load file content from 项目目录 selection
   - [x] Handle loading and error states
 
 ## Phase 5: Polish
@@ -90,17 +91,17 @@ Last updated: 2026-02-11
 
 ## Phase 6: Verification
 
-- [ ] **Task 6.1**: Test scenarios
-  - [ ] Open Files tab in workspace
-  - [ ] Navigate directory tree
-  - [ ] Click file to preview
-  - [ ] Switch between Sessions/Files
-  - [ ] Switch workspaces
+- [x] **Task 6.1**: Test scenarios (manual)
+- [x] Switch Work / 项目目录 tabs in right panel
+- [x] Navigate directory tree
+- [x] Click file to preview
+- [x] Switch back to Work tab
+- [x] Switch workspaces
 
-- [ ] **Task 6.2**: Code review
-  - [ ] Review error handling
-  - [ ] Review performance
-  - [ ] Review security
+- [x] **Task 6.2**: Code review
+  - [x] Review error handling
+  - [x] Review performance
+  - [x] Review security
 
 ---
 
@@ -125,4 +126,4 @@ Phase 6 (Verify)
 
 ---
 
-**Status**: In progress (verification pending)
+**Status**: Complete (Monaco deferred)

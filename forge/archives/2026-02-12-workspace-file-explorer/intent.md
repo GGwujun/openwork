@@ -7,8 +7,9 @@
 ## Scope
 
 ### In Scope
-- 在 Dashboard 左侧工作区列表添加二级切换（Sessions / Files）
-- 实现文件树浏览（递归目录结构）
+- 在 Dashboard 右侧菜单区域新增 Tab（Work / 项目目录）
+- Work Tab 保留现有右侧内容
+- 项目目录 Tab 展示工作区文件树（递归目录结构）
 - 实现文件内容预览（代码高亮，只读模式）
 - 支持常见代码文件类型（JS/TS/CSS/HTML/JSON/Markdown 等）
 
@@ -20,7 +21,7 @@
 
 ## Success Criteria
 
-- [x] 用户可以在工作区下切换到 Files 视图
+- [x] 用户可以在右侧菜单切换到 项目目录 Tab
 - [x] 文件树正确显示目录结构
 - [x] 点击文件在中间区域显示内容
 - [x] 代码文件有语法高亮
@@ -40,6 +41,6 @@
 
 ---
 
-**Status**: Draft  
+**Status**: Complete  
 **Created**: 2025-02-11  
 **Author**: OpenWork Team

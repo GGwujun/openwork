@@ -4,30 +4,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      Dashboard UI                           │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │  Left Sidebar (工作区列表)                            │   │
-│  │  ┌─────────────────────────────────────────────┐   │   │
-│  │  │ Workspace A                                 │   │   │
-│  │  │ ┌─────────────────────────────────────────┐ │   │   │
-│  │  │ │ [Sessions] [Files] ← 二级切换            │ │   │   │
-│  │  │ │                                         │ │   │   │
-│  │  │ │ Sessions 视图:                          │ │   │   │
-│  │  │ │ - Task 1                                │ │   │   │
-│  │  │ │ - Task 2                                │ │   │   │
-│  │  │ │                                         │ │   │   │
-│  │  │ │ Files 视图:                             │ │   │   │
-│  │  │ │ ▼ src/                                  │ │   │   │
-│  │  │ │   ▼ components/                         │ │   │   │
-│  │  │ │     - button.tsx                        │ │   │   │
-│  │  │ │     - modal.tsx                         │ │   │   │
-│  │  │ │   - app.tsx                             │ │   │   │
-│  │  │ │ - package.json                          │ │   │   │
-│  │  │ └─────────────────────────────────────────┘ │   │   │
-│  │  └─────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────┘   │
-│                          │                                  │
-│                          ▼                                  │
+│                      Session View                           │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │  Main Content Area                                  │   │
 │  │  ┌─────────────────────────────────────────────┐   │   │
@@ -43,6 +20,23 @@
 │  │  │ └─────────────────────────────────────────┘ │   │   │
 │  │  └─────────────────────────────────────────────┘   │   │
 │  └─────────────────────────────────────────────────────┘   │
+│                          │                                  │
+│                          ▼                                  │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │  Right Sidebar                                      │   │
+│  │  ┌─────────────────────────────────────────────┐   │   │
+│  │  │ [Work] [项目目录] ← 右侧菜单 Tab              │   │   │
+│  │  │                                             │   │   │
+│  │  │ Work 视图: 现有右侧内容                       │   │   │
+│  │  │ 项目目录 视图:                               │   │   │
+│  │  │ ▼ src/                                      │   │   │
+│  │  │   ▼ components/                             │   │   │
+│  │  │     - button.tsx                            │   │   │
+│  │  │     - modal.tsx                             │   │   │
+│  │  │   - app.tsx                                 │   │   │
+│  │  │ - package.json                              │   │   │
+│  │  └─────────────────────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -53,17 +47,18 @@
 │  │  - 读取目录      │      │  - 读取文件      │              │
 │  │  - 返回文件列表  │      │  - 检测语言      │              │
 │  │  - 过滤二进制    │      │  - 大小限制      │              │
+│  │  - 路径校验      │      │  - 路径校验      │              │
 │  └─────────────────┘      └─────────────────┘              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ## Key Design Decisions
 
-### 1. 二级切换设计
+### 1. 右侧 Tab 设计
 
-- 在工作区展开区域顶部添加 `[Sessions] [Files]` 切换按钮
-- 默认选中 Sessions（保持现有行为）
-- 切换状态按工作区隔离（每个工作区独立记忆）
+- 右侧菜单区域新增 `[Work] [项目目录]` Tab
+- Work Tab 保留现有右侧内容
+- 项目目录 Tab 展示文件树
 
 ### 2. 文件树懒加载
 
@@ -74,26 +69,20 @@
 ### 3. 文件预览策略
 
 - 点击文件时异步加载内容
-- 使用 Monaco Editor 的只读模式
-- 大文件（>100KB）显示警告，>1MB 拒绝加载
-- 二进制文件显示"不支持预览"占位符
+- 使用 `FilePreview` 组件展示内容（`<pre>` 只读渲染）
+- 大文件（>1MB）拒绝加载
+- 二进制文件显示"不支持预览"提示
 
 ### 4. 状态管理
 
 ```typescript
-// 按工作区隔离的状态
+// Session View 中的右侧 Tab 与文件预览状态
 {
-  // 二级标签状态
-  "workspace-id-1": {
-    secondaryTab: "files",
-    expandedPaths: ["/src", "/src/components"],
-    selectedFile: "/src/app.tsx"
+  rightSidebarTab: "work" | "files",
+  expandedFilePathsByWorkspace: {
+    "workspace-id-1": ["/src", "/src/components"],
   },
-  "workspace-id-2": {
-    secondaryTab: "sessions",
-    expandedPaths: [],
-    selectedFile: undefined
-  }
+  selectedFilePath: "/src/app.tsx"
 }
 ```
 
@@ -101,9 +90,9 @@
 
 | 场景 | 处理方式 |
 |------|----------|
-| 目录读取失败 | 显示错误图标 + 提示 |
-| 文件读取失败 | Toast 提示 |
-| 文件过大 | 显示警告信息 |
+| 目录读取失败 | FileTree 错误态 |
+| 文件读取失败 | FilePreview 错误态 |
+| 文件过大 | 后端拒绝 + 错误提示 |
 | 二进制文件 | 显示不支持提示 |
 | 路径越界 | 拒绝访问 |
 
@@ -112,10 +101,10 @@
 ### 文件树加载流程
 
 ```
-1. 用户点击 [Files] 切换
+1. 用户点击 [项目目录] 切换
    │
    ▼
-2. Dashboard 调用 fs_read_dir(workspace_root)
+2. FileTree 调用 fs_read_dir(path, workspace_root)
    │
    ▼
 3. Tauri 后端读取目录，返回 FileEntry[]
@@ -137,46 +126,41 @@
 2. FileTree 调用 onSelectFile(path)
    │
    ▼
-3. Dashboard 调用 fs_read_file(path)
+3. SessionView 调用 fs_read_file(path, workspace_root)
    │
    ▼
 4. Tauri 后端:
-   - 检查路径权限
+   - 校验 path 是否在 workspace_root 内
    - 检测文件类型
    - 读取内容（限制大小）
    - 返回 FileReadResult
    │
    ▼
 5. FilePreview 组件渲染
-   - Monaco Editor 只读模式
-   - 语法高亮
 ```
 
 ## Component Structure
 
 ```
-Dashboard
-├── WorkspaceList
-│   └── WorkspaceItem
-│       ├── SecondaryTabSwitch [Sessions|Files]
-│       ├── SessionList (现有)
-│       └── FileTree (新增)
-│           └── FileTreeItem
-│               ├── Directory (可展开)
-│               └── File (可点击)
+SessionView
+├── RightSidebar
+│   ├── TabSwitch [Work|项目目录]
+│   ├── WorkPanel (现有)
+│   └── FileTree (新增)
+│       └── FileTreeItem
+│           ├── Directory (可展开)
+│           └── File (可点击)
 └── MainContent
     └── FilePreview (新增)
-        └── MonacoEditor (readonly)
 ```
 
 ## Performance Considerations
 
-1. **虚拟滚动**：大目录使用虚拟滚动（>1000 文件）
-2. **防抖加载**：快速切换文件时防抖
-3. **缓存**：已加载的目录结构缓存
-4. **取消请求**：切换文件时取消未完成的加载
+1. **懒加载**：目录展开时才读取子目录
+2. **缓存**：已加载的目录结构缓存
+3. **忽略旧请求**：切换文件时忽略旧请求结果
 
 ---
 
-**Status**: Draft  
+**Status**: Complete  
 **Related**: intent.md, contracts/*
