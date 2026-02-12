@@ -8,12 +8,15 @@ import type {
   ProviderListItem,
   SettingsTab,
   ScheduledJob,
+  TaskCenterItem,
+  TaskCenterStatus,
   HubSkillCard,
   SkillCard,
   StartupPreference,
   WorkspaceSessionGroup,
   View,
 } from "../types";
+import type { ParsedTask } from "../lib/tasks-parser";
 import type { McpDirectoryInfo } from "../constants";
 import { formatRelativeTime, isTauriRuntime, normalizeDirectoryPath } from "../utils";
 import { buildOpenworkWorkspaceBaseUrl, createOpenworkServerClient } from "../lib/openwork-server";
@@ -34,6 +37,7 @@ import ConfigView from "./config";
 import SettingsView from "./settings";
 import SkillsView from "./skills";
 import IdentitiesView from "./identities";
+import TaskCenterView from "./task-center";
 import StatusBar from "../components/status-bar";
 import ProviderAuthModal from "../components/provider-auth-modal";
 import ShareWorkspaceModal from "../components/share-workspace-modal";
@@ -41,6 +45,7 @@ import {
   Box,
   ChevronDown,
   ChevronRight,
+  ClipboardList,
   Cpu,
   History,
   Loader2,
@@ -129,6 +134,20 @@ export type DashboardViewProps = {
   scheduledJobsStatus: string | null;
   scheduledJobsBusy: boolean;
   scheduledJobsUpdatedAt: number | null;
+  taskCenterItemsByStatus: Record<TaskCenterStatus, TaskCenterItem[]>;
+  taskCenterStatus: "idle" | "syncing" | "error";
+  taskCenterError: string | null;
+  taskCenterSyncing: boolean;
+  taskCenterLastUpdatedAt: number | null;
+  taskCenterSyncTasks: (options?: { force?: boolean }) => void;
+  taskCenterStartAutomation: (item: TaskCenterItem) => void;
+  taskCenterSelectedItem: TaskCenterItem | null;
+  taskCenterTasks: ParsedTask[];
+  taskCenterCurrentTaskIndex: number;
+  taskCenterExecuting: boolean;
+  taskCenterSelectItem: (item: TaskCenterItem | null) => void;
+  taskCenterExecuteTask: (item: TaskCenterItem, taskIndex: number) => void;
+  taskCenterCompleteTask: (item: TaskCenterItem, taskIndex: number) => void;
   refreshScheduledJobs: (options?: { force?: boolean }) => void;
   deleteScheduledJob: (name: string) => Promise<void> | void;
   activeWorkspaceRoot: string;
@@ -270,6 +289,8 @@ export default function DashboardView(props: DashboardViewProps) {
         return "Config";
       case "settings":
         return "Settings";
+      case "task-center":
+        return "Task Center";
       default:
         return "Automations";
     }
@@ -1151,6 +1172,24 @@ export default function DashboardView(props: DashboardViewProps) {
                 newTaskDisabled={props.newTaskDisabled}
               />
             </Match>
+            <Match when={props.tab === "task-center"}>
+              <TaskCenterView
+                itemsByStatus={props.taskCenterItemsByStatus}
+                status={props.taskCenterStatus}
+                error={props.taskCenterError}
+                syncing={props.taskCenterSyncing}
+                lastUpdatedAt={props.taskCenterLastUpdatedAt}
+                syncTasks={props.taskCenterSyncTasks}
+                startAutomation={props.taskCenterStartAutomation}
+                selectedItem={props.taskCenterSelectedItem}
+                tasks={props.taskCenterTasks}
+                currentTaskIndex={props.taskCenterCurrentTaskIndex}
+                executing={props.taskCenterExecuting}
+                onSelectItem={props.taskCenterSelectItem}
+                onExecuteTask={props.taskCenterExecuteTask}
+                onCompleteTask={props.taskCenterCompleteTask}
+              />
+            </Match>
             <Match when={props.tab === "skills"}>
               <SkillsView
                 busy={props.busy}
@@ -1414,7 +1453,7 @@ export default function DashboardView(props: DashboardViewProps) {
           mcpStatuses={props.mcpStatuses}
         />
         <nav class="md:hidden border-t border-dls-border bg-dls-surface">
-          <div class="mx-auto max-w-5xl px-4 py-3 grid grid-cols-6 gap-2">
+          <div class="mx-auto max-w-5xl px-4 py-3 grid grid-cols-7 gap-2">
             <button
               class={`flex flex-col items-center gap-1 text-xs ${
                 props.tab === "scheduled" ? "text-gray-12" : "text-gray-10"
@@ -1423,6 +1462,15 @@ export default function DashboardView(props: DashboardViewProps) {
             >
               <History size={18} />
               Automations
+            </button>
+            <button
+              class={`flex flex-col items-center gap-1 text-xs ${
+                props.tab === "task-center" ? "text-gray-12" : "text-gray-10"
+              }`}
+              onClick={() => props.setTab("task-center")}
+            >
+              <ClipboardList size={18} />
+              Task Center
             </button>
             <button
               class={`flex flex-col items-center gap-1 text-xs ${
@@ -1476,6 +1524,7 @@ export default function DashboardView(props: DashboardViewProps) {
       <aside class="w-56 hidden md:flex flex-col bg-dls-sidebar border-l border-dls-border p-4">
         <div class="space-y-1 pt-2">
           {navItem("scheduled", "Automations", <History size={18} />)}
+          {navItem("task-center", "Task Center", <ClipboardList size={18} />)}
           {navItem("skills", "Skills", <Zap size={18} />)}
           {navItem("plugins", "Plugins", <Cpu size={18} />)}
           {navItem("mcp", "Apps", <Box size={18} />)}

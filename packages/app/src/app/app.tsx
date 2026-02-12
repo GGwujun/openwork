@@ -93,6 +93,7 @@ import {
   modelEquals,
   normalizeDirectoryPath,
 } from "./utils";
+import { resolveDashboardTab } from "./utils/dashboard-tabs";
 import { currentLocale, setLocale, t, type Language } from "../i18n";
 import {
   isWindowsPlatform,
@@ -115,6 +116,7 @@ import { createSystemState } from "./system-state";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { createSessionStore } from "./context/session";
 import { createExtensionsStore } from "./context/extensions";
+import { createTaskCenterStore } from "./context/task-center";
 import { useGlobalSync } from "./context/global-sync";
 import { createWorkspaceStore } from "./context/workspace";
 import {
@@ -3735,6 +3737,13 @@ export default function App() {
     }
   }
 
+  const taskCenterStore = createTaskCenterStore({
+    client,
+    activeWorkspaceRoot: () => workspaceStore.activeWorkspaceRoot().trim(),
+    createSessionAndOpen,
+    setPrompt,
+  });
+
 
   onMount(async () => {
     const startupPref = readStartupPreference();
@@ -4528,6 +4537,20 @@ export default function App() {
       scheduledJobsStatus: scheduledJobsStatus(),
       scheduledJobsBusy: scheduledJobsBusy(),
       scheduledJobsUpdatedAt: scheduledJobsUpdatedAt(),
+      taskCenterItemsByStatus: taskCenterStore.itemsByStatus(),
+      taskCenterStatus: taskCenterStore.status(),
+      taskCenterError: taskCenterStore.error(),
+      taskCenterSyncing: taskCenterStore.syncing(),
+      taskCenterLastUpdatedAt: taskCenterStore.lastUpdatedAt(),
+      taskCenterSyncTasks: taskCenterStore.syncTasks,
+      taskCenterStartAutomation: taskCenterStore.startAutomation,
+      taskCenterSelectedItem: taskCenterStore.selectedItem(),
+      taskCenterTasks: taskCenterStore.tasks(),
+      taskCenterCurrentTaskIndex: taskCenterStore.currentTaskIndex(),
+      taskCenterExecuting: taskCenterStore.executing(),
+      taskCenterSelectItem: taskCenterStore.selectItem,
+      taskCenterExecuteTask: taskCenterStore.executeTaskStep,
+      taskCenterCompleteTask: taskCenterStore.completeTaskStep,
       refreshScheduledJobs: (options?: { force?: boolean }) =>
         refreshScheduledJobs(options).catch(() => undefined),
       deleteScheduledJob,
@@ -4780,24 +4803,6 @@ export default function App() {
     renameSession: renameSessionTitle,
     error: error(),
   });
-
-  const dashboardTabs = new Set<DashboardTab>([
-    "scheduled",
-    "skills",
-    "plugins",
-    "mcp",
-    "identities",
-    "config",
-    "settings",
-  ]);
-
-  const resolveDashboardTab = (value?: string | null) => {
-    const normalized = value?.trim().toLowerCase() ?? "";
-    if (dashboardTabs.has(normalized as DashboardTab)) {
-      return normalized as DashboardTab;
-    }
-    return "scheduled";
-  };
 
   const initialRoute = () => {
     if (typeof window === "undefined") return "/session";
