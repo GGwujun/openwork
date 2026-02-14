@@ -3,6 +3,7 @@ import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { Copy, X } from "lucide-solid";
 
 import Button from "./button";
+import { currentLocale, t } from "../../i18n";
 
 type ShareField = {
   label: string;
@@ -26,7 +27,8 @@ export default function ShareWorkspaceModal(props: {
 }) {
   let firstCopyRef: HTMLButtonElement | undefined;
 
-  const title = createMemo(() => props.title ?? "Share workspace");
+  const translate = (key: string) => t(key, currentLocale());
+  const title = createMemo(() => props.title ?? translate("share_workspace.title"));
   const detail = createMemo(() => props.workspaceDetail?.trim() ?? "");
   const note = createMemo(() => props.note?.trim() ?? "");
 
@@ -73,8 +75,8 @@ export default function ShareWorkspaceModal(props: {
             <button
               onClick={props.onClose}
               class="hover:bg-gray-4 p-1 rounded-full"
-              aria-label="Close"
-              title="Close"
+              aria-label={translate("share_workspace.close")}
+              title={translate("share_workspace.close")}
             >
               <X size={20} class="text-gray-10" />
             </button>
@@ -82,9 +84,9 @@ export default function ShareWorkspaceModal(props: {
 
           <div class="p-6 flex-1 overflow-y-auto space-y-6">
             <div class="space-y-2">
-              <div class="text-sm font-medium text-gray-12">Access</div>
+              <div class="text-sm font-medium text-gray-12">{translate("share_workspace.access_title")}</div>
               <div class="text-xs text-gray-10">
-                Share with trusted people only. Anyone with these details can connect.
+                {translate("share_workspace.access_hint")}
               </div>
             </div>
 
@@ -121,7 +123,9 @@ export default function ShareWorkspaceModal(props: {
                             }
                             disabled={!field.value}
                           >
-                            {revealed() ? "Hide" : "Show"}
+                            {revealed()
+                              ? translate("share_workspace.hide")
+                              : translate("share_workspace.show")}
                           </Button>
                         </Show>
                         <Button
@@ -134,7 +138,9 @@ export default function ShareWorkspaceModal(props: {
                           disabled={!field.value}
                         >
                           <Copy size={14} />
-                          {copiedKey() === key() ? "Copied" : "Copy"}
+                          {copiedKey() === key()
+                            ? translate("share_workspace.copied")
+                            : translate("share_workspace.copy")}
                         </Button>
                       </div>
                     </div>
@@ -151,12 +157,12 @@ export default function ShareWorkspaceModal(props: {
 
             <div class="rounded-2xl border border-gray-6 bg-gray-1/30 p-4 space-y-3">
               <div>
-                <div class="text-sm font-medium text-gray-12">Config bundle</div>
-                <div class="text-xs text-gray-10">Export `.opencode/` and `opencode.json` for reuse.</div>
+                <div class="text-sm font-medium text-gray-12">{translate("share_workspace.config_title")}</div>
+                <div class="text-xs text-gray-10">{translate("share_workspace.config_hint")}</div>
               </div>
               <div class="flex items-center justify-between gap-3">
                 <div class="text-xs text-gray-9">
-                  {props.exportDisabledReason?.trim() || "Export is available for local workspaces in the desktop app."}
+                  {props.exportDisabledReason?.trim() || translate("share_workspace.export_desktop_only")}
                 </div>
                 <Button
                   variant="outline"
@@ -164,7 +170,7 @@ export default function ShareWorkspaceModal(props: {
                   onClick={() => props.onExportConfig?.()}
                   disabled={!props.onExportConfig || Boolean(props.exportDisabledReason)}
                 >
-                  Export
+                  {translate("share_workspace.export")}
                 </Button>
               </div>
             </div>
@@ -172,10 +178,12 @@ export default function ShareWorkspaceModal(props: {
             <div class="rounded-2xl border border-gray-6 bg-gray-1/30 p-4 space-y-3">
               <div class="flex items-center justify-between">
                 <div>
-                  <div class="text-sm font-medium text-gray-12">Bots</div>
-                  <div class="text-xs text-gray-10">Alpha. Configure messaging surfaces in Settings.</div>
+                  <div class="text-sm font-medium text-gray-12">{translate("share_workspace.bots_title")}</div>
+                  <div class="text-xs text-gray-10">{translate("share_workspace.bots_hint")}</div>
                 </div>
-                <span class="text-[10px] px-2 py-1 rounded-full border border-gray-6 text-gray-10">alpha</span>
+                <span class="text-[10px] px-2 py-1 rounded-full border border-gray-6 text-gray-10">
+                  {translate("share_workspace.alpha")}
+                </span>
               </div>
               <div class="flex justify-end">
                 <Button
@@ -184,7 +192,7 @@ export default function ShareWorkspaceModal(props: {
                   onClick={() => props.onOpenBots?.()}
                   disabled={!props.onOpenBots}
                 >
-                  Open bot settings
+                  {translate("share_workspace.open_bots_settings")}
                 </Button>
               </div>
             </div>
@@ -192,7 +200,7 @@ export default function ShareWorkspaceModal(props: {
 
           <div class="p-6 border-t border-gray-6 bg-gray-1 flex justify-end">
             <Button variant="ghost" onClick={props.onClose}>
-              Close
+              {translate("share_workspace.close")}
             </Button>
           </div>
         </div>

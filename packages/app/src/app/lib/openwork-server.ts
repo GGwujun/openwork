@@ -202,6 +202,7 @@ export type OpenworkOwpenbotHealthSnapshot = {
     telegram: boolean;
     whatsapp: boolean;
     slack: boolean;
+    wecom: boolean;
   };
   config: {
     groupsEnabled: boolean;
@@ -251,6 +252,18 @@ export type OpenworkOwpenbotSlackIdentitiesResult = {
   items: OpenworkOwpenbotIdentityItem[];
 };
 
+export type OpenworkOwpenbotWecomIdentityItem = {
+  id: string;
+  enabled: boolean;
+  running: boolean;
+  mode: "ai-bot" | "app";
+};
+
+export type OpenworkOwpenbotWecomIdentitiesResult = {
+  ok: boolean;
+  items: OpenworkOwpenbotWecomIdentityItem[];
+};
+
 export type OpenworkOwpenbotTelegramIdentityUpsertResult = {
   ok: boolean;
   persisted?: boolean;
@@ -282,6 +295,22 @@ export type OpenworkOwpenbotSlackIdentityUpsertResult = {
   };
 };
 
+export type OpenworkOwpenbotWecomIdentityUpsertResult = {
+  ok: boolean;
+  persisted?: boolean;
+  applied?: boolean;
+  applyError?: string;
+  applyStatus?: number;
+  wecom?: {
+    id: string;
+    enabled: boolean;
+    mode?: "ai-bot" | "app";
+    applied?: boolean;
+    starting?: boolean;
+    error?: string;
+  };
+};
+
 export type OpenworkOwpenbotTelegramIdentityDeleteResult = {
   ok: boolean;
   persisted?: boolean;
@@ -303,6 +332,19 @@ export type OpenworkOwpenbotSlackIdentityDeleteResult = {
   applyError?: string;
   applyStatus?: number;
   slack?: {
+    id: string;
+    deleted: boolean;
+  };
+};
+
+export type OpenworkOwpenbotWecomIdentityDeleteResult = {
+  ok: boolean;
+  persisted?: boolean;
+  deleted?: boolean;
+  applied?: boolean;
+  applyError?: string;
+  applyStatus?: number;
+  wecom?: {
     id: string;
     deleted: boolean;
   };
@@ -813,6 +855,8 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
       requestJsonRaw<OpenworkOwpenbotTelegramIdentitiesResult>(baseUrl, "/owpenbot/identities/telegram", { token, hostToken, timeoutMs: timeouts.owpenbot }),
     owpenbotSlackIdentities: () =>
       requestJsonRaw<OpenworkOwpenbotSlackIdentitiesResult>(baseUrl, "/owpenbot/identities/slack", { token, hostToken, timeoutMs: timeouts.owpenbot }),
+    owpenbotWecomIdentities: () =>
+      requestJsonRaw<OpenworkOwpenbotWecomIdentitiesResult>(baseUrl, "/owpenbot/identities/wecom", { token, hostToken, timeoutMs: timeouts.owpenbot }),
     listWorkspaces: () => requestJson<OpenworkWorkspaceList>(baseUrl, "/workspaces", { token, hostToken, timeoutMs: timeouts.listWorkspaces }),
     activateWorkspace: (workspaceId: string) =>
       requestJson<{ activeId: string; workspace: OpenworkWorkspaceInfo }>(
@@ -935,6 +979,14 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
         { token, hostToken },
       );
     },
+    getOwpenbotWecomIdentities: (workspaceId: string, options?: { healthPort?: number | null }) => {
+      const query = typeof options?.healthPort === "number" ? `?healthPort=${encodeURIComponent(String(options.healthPort))}` : "";
+      return requestJson<OpenworkOwpenbotWecomIdentitiesResult>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/owpenbot/identities/wecom${query}`,
+        { token, hostToken },
+      );
+    },
     upsertOwpenbotSlackIdentity: (
       workspaceId: string,
       input: { id?: string; botToken: string; appToken: string; enabled?: boolean },
@@ -956,11 +1008,55 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
           },
         },
       ),
+    upsertOwpenbotWecomIdentity: (
+      workspaceId: string,
+      input: {
+        id?: string;
+        mode?: "ai-bot" | "app";
+        token?: string;
+        encodingAesKey?: string;
+        corpId?: string;
+        agentId?: string;
+        secret?: string;
+        webhookPath?: string;
+        enabled?: boolean;
+      },
+      options?: { healthPort?: number | null },
+    ) =>
+      requestJson<OpenworkOwpenbotWecomIdentityUpsertResult>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/owpenbot/identities/wecom`,
+        {
+          token,
+          hostToken,
+          method: "POST",
+          body: {
+            ...(input.id?.trim() ? { id: input.id.trim() } : {}),
+            mode: input.mode ?? "ai-bot",
+            ...(input.token?.trim() ? { token: input.token.trim() } : {}),
+            ...(input.encodingAesKey?.trim() ? { encodingAesKey: input.encodingAesKey.trim() } : {}),
+            ...(input.corpId?.trim() ? { corpId: input.corpId.trim() } : {}),
+            ...(input.agentId?.trim() ? { agentId: input.agentId.trim() } : {}),
+            ...(input.secret?.trim() ? { secret: input.secret.trim() } : {}),
+            ...(input.webhookPath?.trim() ? { webhookPath: input.webhookPath.trim() } : {}),
+            ...(typeof input.enabled === "boolean" ? { enabled: input.enabled } : {}),
+            healthPort: options?.healthPort ?? null,
+          },
+        },
+      ),
     deleteOwpenbotSlackIdentity: (workspaceId: string, identityId: string, options?: { healthPort?: number | null }) => {
       const query = typeof options?.healthPort === "number" ? `?healthPort=${encodeURIComponent(String(options.healthPort))}` : "";
       return requestJson<OpenworkOwpenbotSlackIdentityDeleteResult>(
         baseUrl,
         `/workspace/${encodeURIComponent(workspaceId)}/owpenbot/identities/slack/${encodeURIComponent(identityId)}${query}`,
+        { token, hostToken, method: "DELETE" },
+      );
+    },
+    deleteOwpenbotWecomIdentity: (workspaceId: string, identityId: string, options?: { healthPort?: number | null }) => {
+      const query = typeof options?.healthPort === "number" ? `?healthPort=${encodeURIComponent(String(options.healthPort))}` : "";
+      return requestJson<OpenworkOwpenbotWecomIdentityDeleteResult>(
+        baseUrl,
+        `/workspace/${encodeURIComponent(workspaceId)}/owpenbot/identities/wecom/${encodeURIComponent(identityId)}${query}`,
         { token, hostToken, method: "DELETE" },
       );
     },
@@ -1002,7 +1098,7 @@ export function createOpenworkServerClient(options: { baseUrl: string; token?: s
       ),
     sendOwpenbotMessage: (
       workspaceId: string,
-      input: { channel: "telegram" | "slack"; text: string; identityId?: string; directory?: string },
+      input: { channel: "telegram" | "slack" | "wecom"; text: string; identityId?: string; directory?: string },
       options?: { healthPort?: number | null },
     ) =>
       requestJson<OpenworkOwpenbotSendResult>(

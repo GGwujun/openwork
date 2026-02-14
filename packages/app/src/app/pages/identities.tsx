@@ -18,6 +18,7 @@ import {
 import type {
   OpenworkOwpenbotHealthSnapshot,
   OpenworkOwpenbotIdentityItem,
+  OpenworkOwpenbotWecomIdentityItem,
   OpenworkOwpenbotSendResult,
   OpenworkServerSettings,
   OpenworkServerStatus,
@@ -39,7 +40,7 @@ export type IdentitiesViewProps = {
 const OWPENBOT_AGENT_FILE_PATH = ".opencode/agents/owpenbot.md";
 const OWPENBOT_AGENT_FILE_TEMPLATE = `# Owpenbot Messaging Agent
 
-Use this file to define how the assistant responds in Slack/Telegram for this workspace.
+Use this file to define how the assistant responds in Slack/Telegram/WeCom for this workspace.
 
 Examples:
 - Keep responses concise and action-oriented.
@@ -100,6 +101,19 @@ function SlackIcon(props: { size?: number }) {
   );
 }
 
+function WecomIcon(props: { size?: number }) {
+  const s = () => props.size ?? 20;
+  return (
+    <svg width={s()} height={s()} viewBox="0 0 24 24" fill="none">
+      <rect x="2" y="3" width="20" height="18" rx="6" fill="#2C9B63" />
+      <circle cx="9" cy="11" r="1.4" fill="white" />
+      <circle cx="12" cy="11" r="1.4" fill="white" />
+      <circle cx="15" cy="11" r="1.4" fill="white" />
+      <path d="M8 17l2-2h6l2 2" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  );
+}
+
 /* ---- Status pill sub-component ---- */
 
 function StatusPill(props: { label: string; value: string; ok: boolean }) {
@@ -126,6 +140,9 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
   const [slackIdentities, setSlackIdentities] = createSignal<OpenworkOwpenbotIdentityItem[]>([]);
   const [slackIdentitiesError, setSlackIdentitiesError] = createSignal<string | null>(null);
 
+  const [wecomIdentities, setWecomIdentities] = createSignal<OpenworkOwpenbotWecomIdentityItem[]>([]);
+  const [wecomIdentitiesError, setWecomIdentitiesError] = createSignal<string | null>(null);
+
   const [telegramToken, setTelegramToken] = createSignal("");
   const [telegramEnabled, setTelegramEnabled] = createSignal(true);
   const [telegramSaving, setTelegramSaving] = createSignal(false);
@@ -139,6 +156,18 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
   const [slackStatus, setSlackStatus] = createSignal<string | null>(null);
   const [slackError, setSlackError] = createSignal<string | null>(null);
 
+  const [wecomMode, setWecomMode] = createSignal<"ai-bot" | "app">("ai-bot");
+  const [wecomToken, setWecomToken] = createSignal("");
+  const [wecomEncodingKey, setWecomEncodingKey] = createSignal("");
+  const [wecomCorpId, setWecomCorpId] = createSignal("");
+  const [wecomAgentId, setWecomAgentId] = createSignal("");
+  const [wecomSecret, setWecomSecret] = createSignal("");
+  const [wecomWebhookPath, setWecomWebhookPath] = createSignal("");
+  const [wecomEnabled, setWecomEnabled] = createSignal(true);
+  const [wecomSaving, setWecomSaving] = createSignal(false);
+  const [wecomStatus, setWecomStatus] = createSignal<string | null>(null);
+  const [wecomError, setWecomError] = createSignal<string | null>(null);
+
   const [expandedChannel, setExpandedChannel] = createSignal<string | null>(null);
 
   const [agentLoading, setAgentLoading] = createSignal(false);
@@ -150,7 +179,7 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
   const [agentStatus, setAgentStatus] = createSignal<string | null>(null);
   const [agentError, setAgentError] = createSignal<string | null>(null);
 
-  const [sendChannel, setSendChannel] = createSignal<"telegram" | "slack">("telegram");
+  const [sendChannel, setSendChannel] = createSignal<"telegram" | "slack" | "wecom">("telegram");
   const [sendDirectory, setSendDirectory] = createSignal("");
   const [sendText, setSendText] = createSignal("");
   const [sendBusy, setSendBusy] = createSignal(false);
@@ -206,11 +235,13 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
     let count = 0;
     if (telegramIdentities().some((i) => i.enabled && i.running)) count++;
     if (slackIdentities().some((i) => i.enabled && i.running)) count++;
+    if (wecomIdentities().some((i) => i.enabled && i.running)) count++;
     return count;
   });
 
   const hasTelegramConnected = createMemo(() => telegramIdentities().some((i) => i.enabled));
   const hasSlackConnected = createMemo(() => slackIdentities().some((i) => i.enabled));
+  const hasWecomConnected = createMemo(() => wecomIdentities().some((i) => i.enabled));
   const agentDirty = createMemo(() => agentDraft() !== agentContent());
 
   const resetAgentState = () => {
@@ -360,14 +391,17 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
       setHealthError(null);
       setTelegramIdentitiesError(null);
       setSlackIdentitiesError(null);
+      setWecomIdentitiesError(null);
 
       if (!id) {
         setHealth(null);
         setTelegramIdentities([]);
         setSlackIdentities([]);
+        setWecomIdentities([]);
         setHealthError("Workspace scope unavailable. Reconnect using a workspace URL or switch to a known workspace.");
         setTelegramIdentitiesError("Workspace scope unavailable.");
         setSlackIdentitiesError("Workspace scope unavailable.");
+        setWecomIdentitiesError("Workspace scope unavailable.");
         resetAgentState();
         setSendStatus(null);
         setSendError(null);
@@ -376,10 +410,11 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
         return;
       }
 
-      const [healthRes, tgRes, slackRes] = await Promise.all([
+      const [healthRes, tgRes, slackRes, wecomRes] = await Promise.all([
         client.owpenbotHealth(),
         client.getOwpenbotTelegramIdentities(id),
         client.getOwpenbotSlackIdentities(id),
+        client.getOwpenbotWecomIdentities(id),
       ]);
 
       if (isOwpenbotSnapshot(healthRes.json)) {
@@ -409,6 +444,13 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
         setSlackIdentitiesError("Slack identities unavailable.");
       }
 
+      if (isOwpenbotIdentities(wecomRes)) {
+        setWecomIdentities((wecomRes as { items: OpenworkOwpenbotWecomIdentityItem[] }).items ?? []);
+      } else {
+        setWecomIdentities([]);
+        setWecomIdentitiesError("WeCom identities unavailable.");
+      }
+
       setLastUpdatedAt(Date.now());
       if (!agentDirty() && !agentSaving()) {
         void loadAgentFile();
@@ -418,9 +460,11 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
       setHealth(null);
       setTelegramIdentities([]);
       setSlackIdentities([]);
+      setWecomIdentities([]);
       setHealthError(message);
       setTelegramIdentitiesError(message);
       setSlackIdentitiesError(message);
+      setWecomIdentitiesError(message);
     } finally {
       setRefreshing(false);
     }
@@ -559,6 +603,92 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
     }
   };
 
+  const upsertWecom = async () => {
+    if (wecomSaving()) return;
+    if (!serverReady()) return;
+    const id = workspaceId();
+    if (!id) return;
+    const client = openworkServerClient();
+    if (!client) return;
+
+    const token = wecomToken().trim();
+    const encodingAesKey = wecomEncodingKey().trim();
+    const mode = wecomMode();
+    const corpId = wecomCorpId().trim();
+    const agentId = wecomAgentId().trim();
+    const secret = wecomSecret().trim();
+    if (mode === "ai-bot" && (!token || !encodingAesKey)) {
+      setWecomError("Token and EncodingAESKey are required for AI Bot mode.");
+      return;
+    }
+    if (mode === "app" && (!corpId || !agentId || !secret)) {
+      setWecomError("Corp ID, Agent ID, and Secret are required for app mode.");
+      return;
+    }
+
+    setWecomSaving(true);
+    setWecomStatus(null);
+    setWecomError(null);
+    try {
+      const result = await client.upsertOwpenbotWecomIdentity(id, {
+        mode,
+        ...(token ? { token } : {}),
+        ...(encodingAesKey ? { encodingAesKey } : {}),
+        enabled: wecomEnabled(),
+        ...(corpId ? { corpId } : {}),
+        ...(agentId ? { agentId } : {}),
+        ...(secret ? { secret } : {}),
+        ...(wecomWebhookPath().trim() ? { webhookPath: wecomWebhookPath().trim() } : {}),
+      });
+      if (result.ok) {
+        setWecomStatus(result.applied === false ? "Saved (pending apply)." : "Saved.");
+      } else {
+        setWecomError("Failed to save.");
+      }
+      if (typeof result.applyError === "string" && result.applyError.trim()) {
+        setWecomError(result.applyError.trim());
+      }
+      setWecomToken("");
+      setWecomEncodingKey("");
+      setWecomWebhookPath("");
+      void refreshAll({ force: true });
+    } catch (error) {
+      setWecomError(formatRequestError(error));
+    } finally {
+      setWecomSaving(false);
+    }
+  };
+
+  const deleteWecom = async (identityId: string) => {
+    if (wecomSaving()) return;
+    if (!serverReady()) return;
+    const id = workspaceId();
+    if (!id) return;
+    const client = openworkServerClient();
+    if (!client) return;
+    if (!identityId.trim()) return;
+
+    setWecomSaving(true);
+    setWecomStatus(null);
+    setWecomError(null);
+    try {
+      const result = await client.deleteOwpenbotWecomIdentity(id, identityId);
+      if (result.ok) {
+        setWecomStatus(result.applied === false ? "Deleted (pending apply)." : "Deleted.");
+      } else {
+        setWecomError("Failed to delete.");
+      }
+      if (typeof result.applyError === "string" && result.applyError.trim()) {
+        setWecomError(result.applyError.trim());
+      }
+      void refreshAll({ force: true });
+    } catch (error) {
+      setWecomError(formatRequestError(error));
+    } finally {
+      setWecomSaving(false);
+    }
+  };
+
   createEffect(() => {
     const baseUrl = scopedOpenworkBaseUrl().trim();
     const id = workspaceId();
@@ -572,6 +702,8 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
     setTelegramIdentitiesError(null);
     setSlackIdentities([]);
     setSlackIdentitiesError(null);
+    setWecomIdentities([]);
+    setWecomIdentitiesError(null);
     resetAgentState();
     setSendStatus(null);
     setSendError(null);
@@ -1051,6 +1183,258 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
                 </div>
               </Show>
             </div>
+
+            {/* ---- WeCom channel card ---- */}
+            <div
+              class={`rounded-xl border overflow-hidden transition-colors ${
+                hasWecomConnected()
+                  ? "border-emerald-7/30 bg-emerald-1/20"
+                  : "border-gray-4 bg-gray-1"
+              }`}
+            >
+              {/* Channel header (clickable) */}
+              <button
+                class="w-full flex items-center gap-3.5 px-4 py-3.5 text-left hover:bg-gray-2/50 transition-colors"
+                onClick={() => toggleExpand("wecom")}
+              >
+                <WecomIcon size={28} />
+                <div class="flex-1 min-w-0">
+                  <div class="flex items-center gap-2">
+                    <span class="text-[15px] font-semibold text-gray-12">WeCom</span>
+                    <Show when={hasWecomConnected()}>
+                      <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-emerald-1/40 text-emerald-11">
+                        Connected
+                      </span>
+                    </Show>
+                  </div>
+                  <div class="text-[13px] text-gray-9 mt-0.5 leading-snug">
+                    Support WeCom AI Bot callbacks and standard WeCom app messaging for internal teams.
+                  </div>
+                </div>
+                <ChevronRight
+                  size={16}
+                  class={`text-gray-8 transition-transform flex-shrink-0 ${
+                    expandedChannel() === "wecom" ? "rotate-90" : ""
+                  }`}
+                />
+              </button>
+
+              {/* Expanded section */}
+              <Show when={expandedChannel() === "wecom"}>
+                <div class="border-t border-gray-4 px-4 py-4 space-y-3 animate-[fadeUp_0.2s_ease-out]">
+                  <Show when={wecomIdentitiesError()}>
+                    {(value) => (
+                      <div class="rounded-lg border border-amber-7/20 bg-amber-1/30 px-3 py-2 text-xs text-amber-12">{value()}</div>
+                    )}
+                  </Show>
+
+                  {/* Existing identities */}
+                  <Show when={wecomIdentities().length > 0}>
+                    <div class="space-y-2">
+                      <For each={wecomIdentities()}>
+                        {(item) => (
+                          <div class="flex items-center justify-between gap-3 rounded-lg border border-gray-4 bg-gray-1 px-3 py-2.5">
+                            <div class="min-w-0">
+                              <div class="flex items-center gap-2">
+                                <div class={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${item.running ? "bg-emerald-9" : "bg-gray-8"}`} />
+                                <span class="text-[13px] font-semibold text-gray-12 truncate">
+                                  <span class="font-mono text-[12px]">{item.id}</span>
+                                </span>
+                                <span class="rounded-full px-2 py-0.5 text-[10px] font-semibold bg-gray-3 text-gray-10">
+                                  {item.mode === "app" ? "App" : "AI Bot"}
+                                </span>
+                              </div>
+                              <div class="text-[11px] text-gray-9 mt-0.5 pl-3.5">
+                                {item.enabled ? "Enabled" : "Disabled"} · {item.running ? "Running" : "Stopped"}
+                              </div>
+                            </div>
+                            <div class="flex items-center gap-2 flex-shrink-0">
+                              <Button
+                                variant="outline"
+                                class="h-7 px-2.5 text-[11px]"
+                                disabled={wecomSaving() || item.id === "env" || !workspaceId()}
+                                onClick={() => void deleteWecom(item.id)}
+                              >
+                                Disconnect
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+
+                    {/* Connected stats summary */}
+                    <div class="flex gap-2.5">
+                      <div class="flex-1 rounded-lg border border-gray-4 bg-gray-2/50 px-3 py-2.5">
+                        <div class="text-[11px] text-gray-9 mb-0.5">Status</div>
+                        <div class="flex items-center gap-1.5">
+                          <div class={`w-1.5 h-1.5 rounded-full ${
+                            wecomIdentities().some((i) => i.running) ? "bg-emerald-9" : "bg-gray-8"
+                          }`} />
+                          <span class={`text-[13px] font-semibold ${
+                            wecomIdentities().some((i) => i.running) ? "text-emerald-11" : "text-gray-10"
+                          }`}>
+                            {wecomIdentities().some((i) => i.running) ? "Active" : "Stopped"}
+                          </span>
+                        </div>
+                      </div>
+                      <div class="flex-1 rounded-lg border border-gray-4 bg-gray-2/50 px-3 py-2.5">
+                        <div class="text-[11px] text-gray-9 mb-0.5">Identities</div>
+                        <div class="text-[13px] font-semibold text-gray-12">{wecomIdentities().length} configured</div>
+                      </div>
+                      <div class="flex-1 rounded-lg border border-gray-4 bg-gray-2/50 px-3 py-2.5">
+                        <div class="text-[11px] text-gray-9 mb-0.5">Channel</div>
+                        <div class="text-[13px] font-semibold text-gray-12">
+                          {health()?.channels.wecom ? "On" : "Off"}
+                        </div>
+                      </div>
+                    </div>
+
+                    <Show when={wecomStatus()}>
+                      {(value) => <div class="text-[11px] text-gray-9">{value()}</div>}
+                    </Show>
+                    <Show when={wecomError()}>
+                      {(value) => <div class="text-[11px] text-red-12">{value()}</div>}
+                    </Show>
+                  </Show>
+
+                  {/* Add new identity form */}
+                  <div class="space-y-2.5">
+                    <Show when={wecomIdentities().length === 0}>
+                      <p class="text-[13px] text-gray-10 leading-relaxed">
+                        Configure a WeCom AI Bot webhook or a standard WeCom app to let team members reach this worker.
+                      </p>
+                    </Show>
+
+                    <div>
+                      <label class="text-[12px] text-gray-9 block mb-1">Mode</label>
+                      <select
+                        class="w-full rounded-lg border border-gray-4 bg-gray-1 px-3 py-2 text-sm text-gray-12"
+                        value={wecomMode()}
+                        onChange={(e) => setWecomMode(e.currentTarget.value === "app" ? "app" : "ai-bot")}
+                      >
+                        <option value="ai-bot">AI Bot (callback)</option>
+                        <option value="app">App (access token)</option>
+                      </select>
+                    </div>
+
+                    <Show when={wecomMode() === "ai-bot"}>
+                      <div class="space-y-2">
+                        <div>
+                          <label class="text-[12px] text-gray-9 block mb-1">Token</label>
+                          <input
+                            class="w-full rounded-lg border border-gray-4 bg-gray-1 px-3 py-2.5 text-sm text-gray-12 placeholder:text-gray-8"
+                            placeholder="WeCom token"
+                            type="password"
+                            value={wecomToken()}
+                            onInput={(e) => setWecomToken(e.currentTarget.value)}
+                          />
+                        </div>
+                        <div>
+                          <label class="text-[12px] text-gray-9 block mb-1">EncodingAESKey</label>
+                          <input
+                            class="w-full rounded-lg border border-gray-4 bg-gray-1 px-3 py-2.5 text-sm text-gray-12 placeholder:text-gray-8"
+                            placeholder="43-character EncodingAESKey"
+                            type="password"
+                            value={wecomEncodingKey()}
+                            onInput={(e) => setWecomEncodingKey(e.currentTarget.value)}
+                          />
+                        </div>
+                        <div>
+                          <label class="text-[12px] text-gray-9 block mb-1">Webhook path (optional)</label>
+                          <input
+                            class="w-full rounded-lg border border-gray-4 bg-gray-1 px-3 py-2.5 text-sm text-gray-12 placeholder:text-gray-8"
+                            placeholder="/wecom/<id>"
+                            value={wecomWebhookPath()}
+                            onInput={(e) => setWecomWebhookPath(e.currentTarget.value)}
+                          />
+                        </div>
+                      </div>
+                    </Show>
+
+                    <Show when={wecomMode() === "app"}>
+                      <div class="space-y-2">
+                        <div>
+                          <label class="text-[12px] text-gray-9 block mb-1">Corp ID</label>
+                          <input
+                            class="w-full rounded-lg border border-gray-4 bg-gray-1 px-3 py-2.5 text-sm text-gray-12 placeholder:text-gray-8"
+                            placeholder="wx..."
+                            value={wecomCorpId()}
+                            onInput={(e) => setWecomCorpId(e.currentTarget.value)}
+                          />
+                        </div>
+                        <div>
+                          <label class="text-[12px] text-gray-9 block mb-1">Agent ID</label>
+                          <input
+                            class="w-full rounded-lg border border-gray-4 bg-gray-1 px-3 py-2.5 text-sm text-gray-12 placeholder:text-gray-8"
+                            placeholder="1000002"
+                            value={wecomAgentId()}
+                            onInput={(e) => setWecomAgentId(e.currentTarget.value)}
+                          />
+                        </div>
+                        <div>
+                          <label class="text-[12px] text-gray-9 block mb-1">App secret</label>
+                          <input
+                            class="w-full rounded-lg border border-gray-4 bg-gray-1 px-3 py-2.5 text-sm text-gray-12 placeholder:text-gray-8"
+                            placeholder="App secret"
+                            type="password"
+                            value={wecomSecret()}
+                            onInput={(e) => setWecomSecret(e.currentTarget.value)}
+                          />
+                        </div>
+                      </div>
+                    </Show>
+
+                    <label class="flex items-center gap-2 text-xs text-gray-11">
+                      <input
+                        type="checkbox"
+                        checked={wecomEnabled()}
+                        onChange={(e) => setWecomEnabled(e.currentTarget.checked)}
+                      />
+                      Enabled
+                    </label>
+
+                    <button
+                      onClick={() => void upsertWecom()}
+                      disabled={
+                        wecomSaving()
+                        || !workspaceId()
+                        || (wecomMode() === "ai-bot" && (!wecomToken().trim() || !wecomEncodingKey().trim()))
+                        || (wecomMode() === "app" && (!wecomCorpId().trim() || !wecomAgentId().trim() || !wecomSecret().trim()))
+                      }
+                      class={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-white border-none transition-opacity ${
+                        wecomSaving()
+                        || !workspaceId()
+                        || (wecomMode() === "ai-bot" && (!wecomToken().trim() || !wecomEncodingKey().trim()))
+                        || (wecomMode() === "app" && (!wecomCorpId().trim() || !wecomAgentId().trim() || !wecomSecret().trim()))
+                          ? "opacity-50 cursor-not-allowed"
+                          : "opacity-100 cursor-pointer hover:opacity-90"
+                      }`}
+                      style={{ background: "#2C9B63" }}
+                    >
+                      <Show
+                        when={!wecomSaving()}
+                        fallback={
+                          <div class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        }
+                      >
+                        <Link size={15} />
+                      </Show>
+                      {wecomSaving() ? "Connecting..." : "Connect WeCom"}
+                    </button>
+
+                    <Show when={wecomIdentities().length === 0}>
+                      <Show when={wecomStatus()}>
+                        {(value) => <div class="text-[11px] text-gray-9">{value()}</div>}
+                      </Show>
+                      <Show when={wecomError()}>
+                        {(value) => <div class="text-[11px] text-red-12">{value()}</div>}
+                      </Show>
+                    </Show>
+                  </div>
+                </div>
+              </Show>
+            </div>
           </div>
         </div>
 
@@ -1091,7 +1475,7 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
             <div>
               <div class="text-[13px] font-semibold text-gray-12">Messaging agent behavior</div>
               <div class="text-[12px] text-gray-9 mt-0.5">
-                Edit the workspace instructions used before each inbound Telegram/Slack message.
+                Edit the workspace instructions used before each inbound Telegram/Slack/WeCom message.
               </div>
             </div>
             <span class="rounded-md border border-gray-4 bg-gray-2/50 px-2 py-1 text-[11px] font-mono text-gray-10">
@@ -1171,12 +1555,19 @@ export default function IdentitiesView(props: IdentitiesViewProps) {
               <select
                 class="w-full rounded-lg border border-gray-4 bg-gray-1 px-3 py-2 text-sm text-gray-12"
                 value={sendChannel()}
-                onChange={(e) => setSendChannel(e.currentTarget.value === "slack" ? "slack" : "telegram")}
+                onChange={(e) => {
+                  const value = e.currentTarget.value;
+                  if (value === "slack") setSendChannel("slack");
+                  else if (value === "wecom") setSendChannel("wecom");
+                  else setSendChannel("telegram");
+                }}
               >
                 <option value="telegram">Telegram</option>
                 <option value="slack">Slack</option>
+                <option value="wecom">WeCom (app)</option>
               </select>
             </div>
+
             <div>
               <label class="text-[12px] text-gray-9 block mb-1">Directory (optional)</label>
               <input
