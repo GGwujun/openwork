@@ -9,6 +9,8 @@ import { LANGUAGE_PREF_KEY } from "../app/constants";
 export type Language = "en" | "zh";
 export type Locale = Language;
 
+const DEFAULT_LANGUAGE: Language = "zh";
+
 /**
  * All supported languages - single source of truth
  */
@@ -38,10 +40,27 @@ export const isLanguage = (value: unknown): value is Language => {
   return typeof value === "string" && LANGUAGES.includes(value as Language);
 };
 
+const resolveInitialLocale = (): Language => {
+  if (typeof window === "undefined") {
+    return DEFAULT_LANGUAGE;
+  }
+
+  try {
+    const stored = window.localStorage.getItem(LANGUAGE_PREF_KEY);
+    if (isLanguage(stored)) {
+      return stored;
+    }
+  } catch (e) {
+    console.warn("Failed to read language preference:", e);
+  }
+
+  return DEFAULT_LANGUAGE;
+};
+
 /**
  * Create root-level locale signal with persistence
  */
-const [locale, setLocaleSignal] = createRoot(() => createSignal<Language>("en"));
+const [locale, setLocaleSignal] = createRoot(() => createSignal<Language>(resolveInitialLocale()));
 
 /**
  * Get current locale
@@ -53,8 +72,8 @@ export const currentLocale = (): Language => locale();
  */
 export const setLocale = (newLocale: Language) => {
   if (!isLanguage(newLocale)) {
-    console.warn(`Invalid locale: ${newLocale}, falling back to "en"`);
-    newLocale = "en";
+    console.warn(`Invalid locale: ${newLocale}, falling back to "${DEFAULT_LANGUAGE}"`);
+    newLocale = DEFAULT_LANGUAGE;
   }
 
   setLocaleSignal(newLocale);
@@ -99,19 +118,7 @@ export const t = (key: string, localeOverride?: Language): string => {
  * Call this during app initialization
  */
 export const initLocale = (): Language => {
-  if (typeof window === "undefined") {
-    return "en";
-  }
-
-  try {
-    const stored = window.localStorage.getItem(LANGUAGE_PREF_KEY);
-    if (isLanguage(stored)) {
-      setLocaleSignal(stored);
-      return stored;
-    }
-  } catch (e) {
-    console.warn("Failed to read language preference:", e);
-  }
-
-  return "en";
+  const next = resolveInitialLocale();
+  setLocaleSignal(next);
+  return next;
 };
