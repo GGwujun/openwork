@@ -5,6 +5,7 @@ import type { TodoItem, WorkspaceConnectionState } from "../../types";
 import type { WorkspaceInfo } from "../../lib/tauri";
 import { appDataDir } from "@tauri-apps/api/path";
 import { isTauriRuntime } from "../../utils";
+import { currentLocale, t } from "../../../i18n";
 
 type SessionSummary = {
   id: string;
@@ -54,6 +55,7 @@ export type SidebarProps = {
 };
 
 export default function SessionSidebar(props: SidebarProps) {
+  const translate = (key: string) => t(key, currentLocale());
   const MAX_SESSIONS_PREVIEW = 8;
   const realTodos = createMemo(() => props.todos.filter((todo) => todo.content.trim()));
   const WORKSPACE_COLLAPSE_KEY = "openwork.workspace-collapse.v1";
@@ -389,12 +391,14 @@ export default function SessionSidebar(props: SidebarProps) {
                                 </span>
                                 <Show when={group.workspace.workspaceType === "remote"}>
                                   <span class="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-gray-3 text-gray-11">
-                                    {group.workspace.sandboxContainerName?.trim() ? "Sandbox" : "Remote"}
+                                    {group.workspace.sandboxContainerName?.trim()
+                                      ? translate("workspace.badge.sandbox")
+                                      : translate("workspace.badge.remote")}
                                   </span>
                                 </Show>
                                 <Show when={isGitWorkspace(group.workspace)}>
                                   <span class="text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded-full bg-emerald-3 text-emerald-11">
-                                    Repo
+                                    {translate("workspace.badge.repo")}
                                   </span>
                                 </Show>
                               </div>
@@ -411,11 +415,18 @@ export default function SessionSidebar(props: SidebarProps) {
                               </Show>
                               <Show when={!isConnecting() && connectionStatus() !== "connecting"}>
                                 <Show when={connectionStatus() === "error"}>
-                                  <span class="text-red-11 font-medium">Needs attention</span>
+                                  <span class="text-red-11 font-medium">
+                                    {translate("workspace.status.needs_attention")}
+                                  </span>
                                 </Show>
                                 <Show when={connectionStatus() !== "error"}>
-                                  <Show when={isActive()} fallback={<span class="text-gray-9">Switch</span>}>
-                                    <span class="text-green-11 font-medium">Active</span>
+                                  <Show
+                                    when={isActive()}
+                                    fallback={<span class="text-gray-9">{translate("workspace.status.switch")}</span>}
+                                  >
+                                    <span class="text-green-11 font-medium">
+                                      {translate("workspace.status.active")}
+                                    </span>
                                   </Show>
                                 </Show>
                               </Show>
@@ -427,7 +438,11 @@ export default function SessionSidebar(props: SidebarProps) {
                             type="button"
                             class="p-1 rounded-md text-gray-9 hover:text-gray-12 hover:bg-gray-2"
                             onClick={() => toggleWorkspaceCollapse(group.workspace.id)}
-                            title={collapsed() ? "Expand" : "Collapse"}
+                            title={
+                              collapsed()
+                                ? translate("workspace.action.expand")
+                                : translate("workspace.action.collapse")
+                            }
                           >
                             <ChevronDown
                               size={14}

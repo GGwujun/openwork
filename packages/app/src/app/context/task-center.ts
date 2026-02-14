@@ -167,6 +167,39 @@ function extractOutput(result: unknown): string | null {
   return null;
 }
 
+const taskCenterSkillEntrypoint = "tfs2018-integration/tools/task-center-integration.mjs";
+
+function buildTaskCenterSkillCommand(args: string[]): string {
+  const resolver = [
+    "const fs=require('node:fs');",
+    "const path=require('node:path');",
+    "const os=require('node:os');",
+    "const argIndex=process.argv.indexOf('--');",
+    "const args=argIndex>=0?process.argv.slice(argIndex+1):process.argv.slice(1);",
+    `const rel=${JSON.stringify(taskCenterSkillEntrypoint)};`,
+    "const home=os.homedir();",
+    "const configHome=process.env.XDG_CONFIG_HOME || path.join(home, '.config');",
+    "const appData=process.env.APPDATA || process.env.LOCALAPPDATA || '';",
+    "const candidates=[];",
+    "const push=(value)=>{ if(!value) return; if(!candidates.includes(value)) candidates.push(value); };",
+    "push(path.join(process.cwd(), '.opencode', 'skills', rel));",
+    "push(path.join(process.cwd(), '.opencode', 'skill', rel));",
+    "push(path.join(process.cwd(), '.claude', 'skills', rel));",
+    "push(appData?path.join(appData, 'com.differentai.openwork', '.opencode', 'skills', rel):'');",
+    "push(appData?path.join(appData, 'opencode', 'skills', rel):'');",
+    "push(path.join(configHome, 'opencode', 'skills', rel));",
+    "push(path.join(home, '.claude', 'skills', rel));",
+    "const candidate=candidates.find((value)=>fs.existsSync(value));",
+    "if(!candidate){ console.error('Task Center skill not found. Checked:', candidates.join(' | ')); process.exit(1); }",
+    "const { spawnSync } = require('node:child_process');",
+    "const result=spawnSync(process.execPath, [candidate, ...args], { stdio: 'inherit' });",
+    "process.exit(result.status ?? 1);",
+  ].join(" ");
+  const resolverArg = JSON.stringify(resolver);
+  const argList = args.map((arg) => JSON.stringify(arg)).join(" ");
+  return `node -e ${resolverArg} -- ${argList}`;
+}
+
 function parseWorkItems(raw: string): TaskCenterItem[] {
   const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
   return parsed
@@ -274,7 +307,7 @@ export function createTaskCenterStore(options: {
     }
 
     const directory = options.activeWorkspaceRoot().trim();
-    const command = "node .opencode/skills/tfs2018-integration/tools/task-center-integration.mjs list-json";
+    const command = buildTaskCenterSkillCommand(["list-json"]);
 
     setSyncing(true);
     setStatus("syncing");
@@ -360,7 +393,7 @@ export function createTaskCenterStore(options: {
 
     try {
       // Step 1: Update TFS state to "活动" via shell command
-      const activateCommand = `node .opencode/skills/tfs2018-integration/tools/task-center-integration.mjs activate ${tfsId}`;
+      const activateCommand = buildTaskCenterSkillCommand(["activate", String(tfsId)]);
       
       const sessionApi = activeClient.session as typeof activeClient.session & {
         shellAsync?: (input: {

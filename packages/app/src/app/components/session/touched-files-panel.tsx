@@ -1,5 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { FileText } from "lucide-solid";
+import { currentLocale, t } from "../../../i18n";
 
 export type TouchedFilesPanelProps = {
   files: string[];
@@ -39,6 +40,7 @@ const getDirname = (value: string) => {
 const isMarkdown = (value: string) => /\.(md|mdx|markdown)$/i.test(value);
 
 export default function TouchedFilesPanel(props: TouchedFilesPanelProps) {
+  const translate = (key: string) => t(key, currentLocale());
   const [showAll, setShowAll] = createSignal(false);
   const maxPreview = createMemo(() => {
     const raw = props.maxPreview ?? 6;
@@ -84,7 +86,7 @@ export default function TouchedFilesPanel(props: TouchedFilesPanelProps) {
           <FileText size={14} class="text-dls-secondary" />
           <div class="min-w-0">
             <div class="text-[11px] font-bold tracking-tight text-dls-secondary uppercase">
-              Touched files
+              {translate("session.touched_files_title")}
             </div>
           </div>
         </div>
@@ -96,7 +98,11 @@ export default function TouchedFilesPanel(props: TouchedFilesPanelProps) {
       <div class="mt-2 space-y-1">
         <Show
           when={visibleFiles().length > 0}
-          fallback={<div class="text-xs text-dls-secondary px-1 py-1">None yet.</div>}
+          fallback={
+            <div class="text-xs text-dls-secondary px-1 py-1">
+              {translate("session.touched_files_empty")}
+            </div>
+          }
         >
           <For each={visibleFiles()}>
             {(file) => {
@@ -113,7 +119,11 @@ export default function TouchedFilesPanel(props: TouchedFilesPanelProps) {
                   onClick={() => props.onFileClick?.(file)}
                   disabled={!canOpen()}
                   title={display()}
-                  aria-label={canOpen() ? `Open ${display()}` : display()}
+                  aria-label={
+                    canOpen()
+                      ? translate("session.touched_files_open").replace("{path}", display())
+                      : display()
+                  }
                 >
                   <div class="mt-0.5 shrink-0">
                     <span class="h-1.5 w-1.5 rounded-full bg-dls-border inline-block" />
@@ -143,7 +153,12 @@ export default function TouchedFilesPanel(props: TouchedFilesPanelProps) {
             class="w-full mt-1 rounded-lg px-2 py-1.5 text-xs text-dls-secondary hover:text-dls-text hover:bg-dls-active transition-colors"
             onClick={() => setShowAll((prev) => !prev)}
           >
-            {showAll() ? "Show fewer" : `Show ${hiddenCount()} more`}
+            {showAll()
+              ? translate("session.touched_files_show_fewer")
+              : translate("session.touched_files_show_more").replace(
+                  "{count}",
+                  String(hiddenCount()),
+                )}
           </button>
         </Show>
       </div>

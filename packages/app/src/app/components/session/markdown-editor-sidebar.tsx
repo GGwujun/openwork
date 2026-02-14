@@ -11,6 +11,7 @@ import type {
 import { OpenworkServerError } from "../../lib/openwork-server";
 import { fsReadFile } from "../../lib/tauri";
 import { isTauriRuntime } from "../../utils";
+import { currentLocale, t } from "../../../i18n";
 
 export type MarkdownEditorSidebarProps = {
   open: boolean;
@@ -24,8 +25,19 @@ export type MarkdownEditorSidebarProps = {
 };
 
 const isMarkdown = (value: string) => /\.(md|mdx|markdown)$/i.test(value);
+const isScript = (value: string) => /\.(js|jsx|ts|tsx|mjs|cjs)$/i.test(value);
 const basename = (value: string) => value.split(/[/\\]/).filter(Boolean).pop() ?? value;
 const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+const normalizeScriptWhitespace = (value: string) => {
+  const normalized = value.replace(/\r\n?/g, "\n");
+  const cleaned = normalized
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""))
+    .join("\n")
+    .replace(/\s+$/g, "");
+  return cleaned ? `${cleaned}\n` : "";
+};
 
 const isSafeUrl = (url: string) => {
   const normalized = (url || "").trim().toLowerCase();
@@ -115,6 +127,7 @@ function useThrottledValue(value: () => string, delayMs = 120) {
 }
 
 export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps) {
+  const translate = (key: string) => t(key, currentLocale());
   let textareaRef: HTMLTextAreaElement | undefined;
 
   const [loading, setLoading] = createSignal(false);
@@ -134,8 +147,9 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
   const [pendingReason, setPendingReason] = createSignal<"switch" | "reload" | null>(null);
 
   const path = createMemo(() => props.path?.trim() ?? "");
-  const title = createMemo(() => (path() ? basename(path()) : "Markdown"));
+  const title = createMemo(() => (path() ? basename(path()) : translate("markdown_editor.default_title")));
   const isMarkdownFile = createMemo(() => isMarkdown(path()));
+  const isScriptFile = createMemo(() => isScript(path()));
   const isEditableFile = createMemo(() => /\.(md|mdx|markdown|json|ya?ml|toml|js|ts)$/i.test(path()));
   const isRemoteWorkspace = createMemo(() => props.workspaceType === "remote");
   const canUseClient = createMemo(() => Boolean(props.client && props.workspaceId));
@@ -145,14 +159,15 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
   const canEdit = createMemo(() => isEditableFile() && canUseClient());
   const dirty = createMemo(() => canEdit() && draft() !== original());
   const canSave = createMemo(() => dirty() && !saving() && canEdit());
+  const canFormat = createMemo(() => canEdit() && isScriptFile());
   const writeDisabledReason = createMemo(() => {
     if (canEdit()) return null;
     if (!path()) return null;
     if (!isEditableFile()) {
-      return "Read-only preview. Editing is available for markdown, JSON, YAML, TOML, JavaScript, and TypeScript files.";
+      return translate("markdown_editor.readonly_formatting_hint");
     }
-    if (!canUseClient()) return "Read-only preview. Connect to an OpenWork server workspace to edit.";
-    return "Read-only preview.";
+    if (!canUseClient()) return translate("markdown_editor.readonly_connect_hint");
+    return translate("markdown_editor.readonly_preview");
   });
   const activeView = createMemo(() => (canEdit() ? view() : "preview"));
 
@@ -216,10 +231,10 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
         return;
       }
 
-      setError("File preview requires the desktop app or an OpenWork server workspace.");
+      setError(translate("markdown_editor.preview_requires_desktop_or_server"));
       setLoadedPath(target);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to load file";
+      const message = err instanceof Error ? err.message : translate("markdown_editor.load_failed");
       setError(message);
       setLoadedPath(target);
     } finally {
@@ -232,7 +247,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
     const workspaceId = props.workspaceId;
     const target = path();
     if (!canEdit() || !client || !workspaceId || !target) {
-      props.onToast?.("Read-only preview");
+      props.onToast?.(translate("markdown_editor.toast_readonly"));
       return;
     }
     if (!dirty()) return;
@@ -266,6 +281,20 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
     } finally {
       setSaving(false);
     }
+  };
+
+  const formatDraft = () => {
+    if (!canFormat()) {
+      props.onToast?.(translate("markdown_editor.toast_formatting_only_scripts"));
+      return;
+    }
+    const next = normalizeScriptWhitespace(draft());
+    if (next === draft()) {
+      props.onToast?.(translate("markdown_editor.toast_already_formatted"));
+      return;
+    }
+    setDraft(next);
+    props.onToast?.(translate("markdown_editor.toast_basic_formatting"));
   };
 
   const requestClose = () => {
@@ -350,12 +379,12 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
               <div class="text-sm font-semibold text-dls-text truncate">{title()}</div>
               <Show when={dirty()}>
                 <span class="text-[10px] px-2 py-0.5 rounded-full border border-amber-7/40 bg-amber-2/30 text-amber-11">
-                  Unsaved
+                  {translate("markdown_editor.badge_unsaved")}
                 </span>
               </Show>
               <Show when={!canEdit()}>
                 <span class="text-[10px] px-2 py-0.5 rounded-full border border-dls-border bg-dls-surface text-dls-secondary">
-                  Read-only
+                  {translate("markdown_editor.badge_readonly")}
                 </span>
               </Show>
             </div>
@@ -376,7 +405,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                     }`}
                     onClick={() => setView("write")}
                   >
-                    Write
+                    {translate("markdown_editor.view_write")}
                   </button>
                   <button
                     type="button"
@@ -387,7 +416,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                     }`}
                     onClick={() => setView("preview")}
                   >
-                    Preview
+                    {translate("markdown_editor.view_preview")}
                   </button>
                 </div>
               </Show>
@@ -397,21 +426,33 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                 class="text-xs h-9 py-0 px-3"
                 onClick={requestReload}
                 disabled={loading() || saving()}
-                title="Reload from disk"
+                title={translate("markdown_editor.reload_title")}
               >
                 <RefreshCcw size={14} class={loading() ? "animate-spin" : ""} />
-                Reload
+                {translate("markdown_editor.reload")}
               </Button>
+
+              <Show when={canFormat()}>
+                <Button
+                  variant="outline"
+                  class="text-xs h-9 py-0 px-3"
+                  onClick={formatDraft}
+                  disabled={loading() || saving()}
+                  title={translate("markdown_editor.format_title")}
+                >
+                  {translate("markdown_editor.format")}
+                </Button>
+              </Show>
 
               <Show when={canEdit()}>
                 <Button
                   class="text-xs h-9 py-0 px-3"
                   onClick={() => void save()}
                   disabled={!canSave()}
-                  title={writeDisabledReason() ?? "Save (Ctrl/Cmd+S)"}
+                  title={writeDisabledReason() ?? translate("markdown_editor.save_title")}
                 >
                   <Save size={14} class={saving() ? "animate-pulse" : ""} />
-                  {saving() ? "Saving..." : "Save"}
+                  {saving() ? translate("markdown_editor.saving") : translate("markdown_editor.save")}
                 </Button>
               </Show>
 
@@ -440,7 +481,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
         <Show when={confirmOverwrite()}>
           <div class="shrink-0 px-4 py-2 border-b border-dls-border bg-amber-2/20 text-amber-11 text-xs flex items-center justify-between gap-3">
             <div class="min-w-0">
-              File changed since load. Overwrite anyway?
+              {translate("markdown_editor.overwrite_confirm")}
             </div>
             <div class="shrink-0 flex items-center gap-2">
               <Button
@@ -448,7 +489,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                 class="text-xs h-8 py-0 px-3"
                 onClick={() => setConfirmOverwrite(false)}
               >
-                Cancel
+                {translate("markdown_editor.cancel")}
               </Button>
               <Button
                 variant="danger"
@@ -458,7 +499,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                   void save({ force: true });
                 }}
               >
-                Overwrite
+                {translate("markdown_editor.overwrite")}
               </Button>
             </div>
           </div>
@@ -466,14 +507,14 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
 
         <Show when={confirmDiscardReload()}>
           <div class="shrink-0 px-4 py-2 border-b border-dls-border bg-amber-2/20 text-amber-11 text-xs flex items-center justify-between gap-3">
-            <div class="min-w-0">Discard unsaved changes and reload from disk?</div>
+            <div class="min-w-0">{translate("markdown_editor.discard_reload_confirm")}</div>
             <div class="shrink-0 flex items-center gap-2">
               <Button
                 variant="outline"
                 class="text-xs h-8 py-0 px-3"
                 onClick={() => setConfirmDiscardReload(false)}
               >
-                Cancel
+                {translate("markdown_editor.cancel")}
               </Button>
               <Button
                 variant="secondary"
@@ -484,7 +525,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                   if (target) void load(target);
                 }}
               >
-                Reload
+                {translate("markdown_editor.reload")}
               </Button>
             </div>
           </div>
@@ -492,14 +533,14 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
 
         <Show when={confirmDiscardClose()}>
           <div class="shrink-0 px-4 py-2 border-b border-dls-border bg-amber-2/20 text-amber-11 text-xs flex items-center justify-between gap-3">
-            <div class="min-w-0">Discard unsaved changes and close?</div>
+            <div class="min-w-0">{translate("markdown_editor.discard_close_confirm")}</div>
             <div class="shrink-0 flex items-center gap-2">
               <Button
                 variant="outline"
                 class="text-xs h-8 py-0 px-3"
                 onClick={() => setConfirmDiscardClose(false)}
               >
-                Keep
+                {translate("markdown_editor.keep")}
               </Button>
               <Button
                 variant="secondary"
@@ -510,7 +551,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                   props.onClose();
                 }}
               >
-                Discard
+                {translate("markdown_editor.discard")}
               </Button>
             </div>
           </div>
@@ -519,7 +560,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
         <Show when={pendingPath() && pendingReason() === "switch"}>
           <div class="shrink-0 px-4 py-2 border-b border-dls-border bg-amber-2/20 text-amber-11 text-xs flex items-center justify-between gap-3">
             <div class="min-w-0 truncate" title={pendingPath() ?? ""}>
-              Switch to {pendingPath()}
+              {translate("markdown_editor.switch_to").replace("{path}", pendingPath() ?? "")}
             </div>
             <div class="shrink-0 flex items-center gap-2">
               <Button
@@ -530,7 +571,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                   setPendingReason(null);
                 }}
               >
-                Cancel
+                {translate("markdown_editor.cancel")}
               </Button>
               <Button
                 variant="secondary"
@@ -544,14 +585,14 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                   if (next) void load(next);
                 }}
               >
-                Discard & switch
+                {translate("markdown_editor.discard_switch")}
               </Button>
               <Button
                 class="text-xs h-8 py-0 px-3"
                 onClick={() => void save()}
                 disabled={!canSave()}
               >
-                Save & switch
+                {translate("markdown_editor.save_switch")}
               </Button>
             </div>
           </div>
@@ -598,7 +639,7 @@ export default function MarkdownEditorSidebar(props: MarkdownEditorSidebarProps)
                   />
                   <Show when={!previewHtml()}>
                     <div class="pointer-events-none absolute inset-x-6 top-6 text-xs text-dls-secondary">
-                      Nothing to preview yet. Start typing markdown in Write mode.
+                      {translate("markdown_editor.empty_preview")}
                     </div>
                   </Show>
                 </div>
