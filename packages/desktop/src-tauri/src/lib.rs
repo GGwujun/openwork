@@ -15,6 +15,10 @@ mod workspace;
 
 pub use types::*;
 
+use commands::auth::{
+    check_login_status, cleanup_login_state, confirm_login, generate_wecom_login_url,
+    set_login_scanned, validate_token, clear_auth_cache, LoginStateStore,
+};
 use commands::command_files::{
     opencode_command_delete, opencode_command_list, opencode_command_write,
 };
@@ -69,7 +73,15 @@ pub fn run() {
         .manage(OpenworkServerManager::default())
         .manage(OwpenbotManager::default())
         .manage(WorkspaceWatchState::default())
+        .manage(LoginStateStore::default())
         .invoke_handler(tauri::generate_handler![
+            generate_wecom_login_url,
+            check_login_status,
+            set_login_scanned,
+            confirm_login,
+            validate_token,
+            clear_auth_cache,
+            cleanup_login_state,
             engine_start,
             engine_stop,
             engine_info,

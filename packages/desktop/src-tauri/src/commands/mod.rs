@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod command_files;
 pub mod config;
 pub mod engine;
