@@ -1,9 +1,10 @@
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 
 import type { TaskCenterItem, TaskCenterStatus, TaskCenterStage } from "../types";
 import type { ParsedTask } from "../lib/tasks-parser";
 import { formatRelativeTime } from "../utils";
 import { usePlatform } from "../context/platform";
+import { currentLocale, t } from "../../i18n";
 
 import Button from "../components/button";
 import {
@@ -18,39 +19,23 @@ import {
   X,
 } from "lucide-solid";
 
-// Stage labels mapping
-const stageLabels: Record<TaskCenterStage, string> = {
-  idle: "待处理",
-  syncing: "同步中",
-  analyzing: "分析",
-  designing: "设计",
-  planning: "计划",
-  implementing: "实现",
-  reviewing: "评审",
-  archiving: "归档",
+const stageLabelKeys: Record<TaskCenterStage, string> = {
+  idle: "task_center.stage.idle",
+  syncing: "task_center.stage.syncing",
+  analyzing: "task_center.stage.analyzing",
+  designing: "task_center.stage.designing",
+  planning: "task_center.stage.planning",
+  implementing: "task_center.stage.implementing",
+  reviewing: "task_center.stage.reviewing",
+  archiving: "task_center.stage.archiving",
 };
 
-// SubStage labels mapping (only for implementing stage)
-const subStageLabels: Record<string, string> = {
-  "workspace-prep": "环境初始化",
-  "plan-exec": "执行计划",
-  "tests": "运行测试",
-  "fixes": "修复问题",
-  "ready-review": "待评审",
-};
-
-// Helper function to get stage label with optional subStage
-const stageLabel = (stage?: TaskCenterStage, subStage?: string | null): string => {
-  if (!stage || stage === "idle" || stage === "syncing") return "";
-  
-  const mainLabel = stageLabels[stage] || stage;
-  
-  // Only show subStage for implementing stage
-  if (stage === "implementing" && subStage && subStageLabels[subStage]) {
-    return `${mainLabel} · ${subStageLabels[subStage]}`;
-  }
-  
-  return mainLabel;
+const subStageLabelKeys: Record<string, string> = {
+  "workspace-prep": "task_center.substage.workspace_prep",
+  "plan-exec": "task_center.substage.plan_exec",
+  tests: "task_center.substage.tests",
+  fixes: "task_center.substage.fixes",
+  "ready-review": "task_center.substage.ready_review",
 };
 
 // Task status display helpers
@@ -64,17 +49,15 @@ const taskStatusIcon = (status: ParsedTask["status"]) => {
   }
 };
 
-const taskStatusText = (status: ParsedTask["status"]) => {
-  switch (status) {
-    case "pending": return "待执行";
-    case "in-progress": return "执行中";
-    case "completed": return "已完成";
-    case "failed": return "失败";
-    default: return "待执行";
-  }
+const taskStatusTextKeys: Record<ParsedTask["status"], string> = {
+  pending: "task_center.task_status.pending",
+  "in-progress": "task_center.task_status.in_progress",
+  completed: "task_center.task_status.completed",
+  failed: "task_center.task_status.failed",
 };
 
 export type TaskCenterViewProps = {
+  clientConnected: boolean;
   itemsByStatus: Record<TaskCenterStatus, TaskCenterItem[]>;
   status: "idle" | "syncing" | "error";
   error: string | null;
@@ -94,37 +77,32 @@ export type TaskCenterViewProps = {
 
 const STATUS_ORDER: TaskCenterStatus[] = ["todo", "progress", "done", "failed", "archived"];
 
-const statusMeta: Record<TaskCenterStatus, { label: string; tone: string; badge: string }> = {
+const statusMeta: Record<TaskCenterStatus, { labelKey: string; tone: string; badge: string }> = {
   todo: {
-    label: "To do",
+    labelKey: "task_center.status.todo",
     tone: "border-gray-4 bg-gray-1 text-gray-10",
     badge: "bg-gray-3 text-gray-10",
   },
   progress: {
-    label: "In progress",
+    labelKey: "task_center.status.progress",
     tone: "border-amber-6/60 bg-amber-1/60 text-amber-11",
     badge: "bg-amber-3 text-amber-11",
   },
   done: {
-    label: "Done",
+    labelKey: "task_center.status.done",
     tone: "border-emerald-6/60 bg-emerald-1/60 text-emerald-11",
     badge: "bg-emerald-3 text-emerald-11",
   },
   failed: {
-    label: "Blocked",
+    labelKey: "task_center.status.failed",
     tone: "border-red-6/60 bg-red-1/60 text-red-11",
     badge: "bg-red-3 text-red-11",
   },
   archived: {
-    label: "Archived",
+    labelKey: "task_center.status.archived",
     tone: "border-slate-6/60 bg-slate-1/60 text-slate-11",
     badge: "bg-slate-3 text-slate-11",
   },
-};
-
-const toLabel = (value?: number | null) => {
-  if (!value) return "Not synced yet";
-  return formatRelativeTime(value);
 };
 
 const tagLabel = (value: string) => value.replace(/\s+/g, " ").trim();
@@ -140,6 +118,7 @@ function TaskExecutionPanel(props: {
   tasks: ParsedTask[];
   currentTaskIndex: number;
   executing: boolean;
+  translate: (key: string) => string;
   onClose: () => void;
   onExecuteTask: (taskIndex: number) => void;
   onCompleteTask: (taskIndex: number) => void;
@@ -163,7 +142,7 @@ function TaskExecutionPanel(props: {
         {/* Header */}
         <div class="flex items-center justify-between border-b border-dls-border px-4 py-3">
           <div>
-            <h3 class="text-sm font-semibold text-dls-text">执行计划</h3>
+            <h3 class="text-sm font-semibold text-dls-text">{props.translate("task_center.execution_title")}</h3>
             <p class="text-[11px] text-dls-secondary">#{props.item.tfsId} · {props.item.title}</p>
           </div>
           <button
@@ -202,10 +181,13 @@ function TaskExecutionPanel(props: {
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center justify-between gap-2">
                         <span class="text-sm font-medium text-dls-text truncate">
-                          Task {index() + 1}: {task.title}
+                          {props
+                            .translate("task_center.task_line")
+                            .replace("{index}", String(index() + 1))
+                            .replace("{title}", task.title)}
                         </span>
                         <span class="text-[10px] text-dls-secondary whitespace-nowrap">
-                          {taskStatusText(task.status)}
+                          {props.translate(taskStatusTextKeys[task.status])}
                         </span>
                       </div>
 
@@ -218,7 +200,7 @@ function TaskExecutionPanel(props: {
                             onClick={() => props.onExecuteTask(index())}
                           >
                             <Play size={10} />
-                            开始执行
+                            {props.translate("task_center.execute")}
                           </Button>
                         </Show>
                         <Show when={canComp() && !props.executing}>
@@ -228,13 +210,13 @@ function TaskExecutionPanel(props: {
                             onClick={() => props.onCompleteTask(index())}
                           >
                             <CheckCircle2 size={10} />
-                            标记完成
+                            {props.translate("task_center.mark_complete")}
                           </Button>
                         </Show>
                         <Show when={props.executing && index() === props.currentTaskIndex}>
                           <span class="text-[10px] text-amber-6 flex items-center gap-1">
                             <Loader2 size={10} class="animate-spin" />
-                            执行中...
+                            {props.translate("task_center.executing")}
                           </span>
                         </Show>
                       </div>
@@ -250,7 +232,9 @@ function TaskExecutionPanel(props: {
                   {/* Expanded Description */}
                   <Show when={isExpanded()}>
                     <div class="mt-2 pl-6 text-[11px] text-dls-secondary border-t border-dls-border pt-2">
-                      <p class="whitespace-pre-wrap">{task.description || "暂无描述"}</p>
+                      <p class="whitespace-pre-wrap">
+                        {task.description || props.translate("task_center.no_description")}
+                      </p>
                     </div>
                   </Show>
                 </div>
@@ -263,10 +247,15 @@ function TaskExecutionPanel(props: {
         <div class="border-t border-dls-border px-4 py-3 bg-dls-hover/50">
           <div class="flex items-center justify-between text-[11px] text-dls-secondary">
             <span>
-              进度: {props.tasks.filter(t => t.status === "completed").length} / {props.tasks.length}
+              {props
+                .translate("task_center.progress_label")
+                .replace("{done}", String(props.tasks.filter(t => t.status === "completed").length))
+                .replace("{total}", String(props.tasks.length))}
             </span>
             <Show when={props.tasks.every(t => t.status === "completed")}>
-              <span class="text-emerald-6 font-medium">✓ 所有任务已完成</span>
+              <span class="text-emerald-6 font-medium">
+                {props.translate("task_center.all_tasks_completed")}
+              </span>
             </Show>
           </div>
         </div>
@@ -277,13 +266,35 @@ function TaskExecutionPanel(props: {
 
 export default function TaskCenterView(props: TaskCenterViewProps) {
   const platform = usePlatform();
+  const translate = (key: string) => t(key, currentLocale());
+  const toLabel = (value?: number | null) => {
+    if (!value) return translate("task_center.last_sync_never");
+    return formatRelativeTime(value);
+  };
   const lastUpdatedLabel = createMemo(() => toLabel(props.lastUpdatedAt));
+  const stageLabel = (stage?: TaskCenterStage, subStage?: string | null): string => {
+    if (!stage || stage === "idle" || stage === "syncing") return "";
+
+    const mainLabelKey = stageLabelKeys[stage];
+    const mainLabel = mainLabelKey ? translate(mainLabelKey) : stage;
+
+    if (stage === "implementing" && subStage) {
+      const subLabelKey = subStageLabelKeys[subStage];
+      if (subLabelKey) {
+        return `${mainLabel} · ${translate(subLabelKey)}`;
+      }
+    }
+
+    return mainLabel;
+  };
 
   // Local state for task execution panel
   const [showTaskPanel, setShowTaskPanel] = createSignal(false);
   const [selectedItem, setSelectedItem] = createSignal<TaskCenterItem | null>(null);
 
-  onMount(() => {
+  createEffect(() => {
+    if (!props.clientConnected) return;
+    if (typeof window === "undefined") return;
     const interval = window.setInterval(() => props.syncTasks(), 60_000);
     onCleanup(() => window.clearInterval(interval));
   });
@@ -319,18 +330,20 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p class="text-xs text-dls-secondary">
-              Sync your TFS work items and drive them through OpenWork automations.
+              {translate("task_center.sync_hint")}
             </p>
           </div>
           <div class="flex flex-col gap-3 sm:items-end">
             <Button
               variant="outline"
               class="h-8 px-3 text-[11px]"
-              disabled={props.syncing}
+              disabled={props.syncing || !props.clientConnected}
               onClick={() => props.syncTasks({ force: true })}
             >
               {props.syncing ? <Loader2 size={14} class="animate-spin" /> : <RefreshCw size={14} />}
-              {props.syncing ? "Syncing" : "Refresh"} · Last sync: {lastUpdatedLabel()}
+              {props.syncing ? translate("task_center.syncing") : translate("task_center.refresh")}
+              {" · "}
+              {translate("task_center.last_sync").replace("{time}", lastUpdatedLabel())}
             </Button>
           </div>
         </div>
@@ -349,6 +362,7 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
           tasks={props.tasks ?? []}
           currentTaskIndex={props.currentTaskIndex ?? -1}
           executing={props.executing ?? false}
+          translate={translate}
           onClose={handleClosePanel}
           onExecuteTask={handleExecuteTask}
           onCompleteTask={handleCompleteTask}
@@ -364,7 +378,7 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
               <div class="min-w-[260px] max-w-[320px] flex-1 flex flex-col min-h-0">
                 <div class={`rounded-2xl border px-4 py-3 ${meta.tone}`}>
                   <div class="flex items-center justify-between">
-                    <div class="text-sm font-semibold">{meta.label}</div>
+                    <div class="text-sm font-semibold">{translate(meta.labelKey)}</div>
                     <span class={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${meta.badge}`}>
                       {items().length}
                     </span>
@@ -375,7 +389,10 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                     when={items().length > 0}
                     fallback={
                       <div class="rounded-2xl border border-dls-border bg-dls-surface px-4 py-6 text-xs text-dls-secondary">
-                        No tasks in {meta.label.toLowerCase()}.
+                        {translate("task_center.no_tasks_in").replace(
+                          "{status}",
+                          translate(meta.labelKey),
+                        )}
                       </div>
                     }
                   >
@@ -398,7 +415,7 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                 type="button"
                                 onClick={() => item.url && platform.openLink(item.url)}
                                 class="rounded-full p-1 text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
-                                title="Open in TFS"
+                                title={translate("task_center.open_in_tfs")}
                               >
                                 <ExternalLink size={14} />
                               </button>
@@ -462,7 +479,7 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                 onClick={() => handleStartAutomation(item)}
                               >
                                 <Play size={12} />
-                                生成计划
+                                {translate("task_center.generate_plan")}
                               </Button>
                             </div>
                           </Show>
@@ -475,7 +492,7 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                 onClick={() => handleStartAutomation(item)}
                               >
                                 <ExternalLink size={12} />
-                                查看计划
+                                {translate("task_center.view_plan")}
                               </Button>
                             </div>
                           </Show>
@@ -488,7 +505,7 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                 onClick={() => handleStartAutomation(item)}
                               >
                                 <ExternalLink size={12} />
-                                查看归档
+                                {translate("task_center.view_archive")}
                               </Button>
                             </div>
                           </Show>

@@ -18,6 +18,8 @@ import type {
 } from "../types";
 import type { ParsedTask } from "../lib/tasks-parser";
 import type { McpDirectoryInfo } from "../constants";
+import type { Language } from "../../i18n";
+import { currentLocale, t } from "../../i18n";
 import { appDataDir } from "@tauri-apps/api/path";
 import { formatRelativeTime, isTauriRuntime, normalizeDirectoryPath } from "../utils";
 import { buildOpenworkWorkspaceBaseUrl, createOpenworkServerClient } from "../lib/openwork-server";
@@ -235,6 +237,8 @@ export type DashboardViewProps = {
   toggleUpdateAutoDownload: () => void;
   themeMode: "light" | "dark" | "system";
   setThemeMode: (value: "light" | "dark" | "system") => void;
+  language: Language;
+  setLanguage: (language: Language) => void;
   updateStatus: {
     state: string;
     lastCheckedAt?: number | null;
@@ -278,26 +282,27 @@ export type DashboardViewProps = {
 };
 
 export default function DashboardView(props: DashboardViewProps) {
+  const translate = (key: string) => t(key, currentLocale());
   const title = createMemo(() => {
     switch (props.tab) {
       case "scheduled":
-        return "Automations";
+        return translate("dashboard.automations");
       case "skills":
-        return "Skills";
+        return translate("dashboard.skills");
       case "plugins":
-        return "Plugins";
+        return translate("dashboard.plugins");
       case "mcp":
-        return "Apps";
+        return translate("dashboard.mcps");
       case "identities":
-        return "Identities";
+        return translate("dashboard.identities");
       case "config":
-        return "Config";
+        return translate("dashboard.config");
       case "settings":
-        return "Settings";
+        return translate("dashboard.settings");
       case "task-center":
-        return "Task Center";
+        return translate("dashboard.task_center");
       default:
-        return "Automations";
+        return translate("dashboard.automations");
     }
   });
 
@@ -483,7 +488,9 @@ export default function DashboardView(props: DashboardViewProps) {
   const showMoreLabel = (workspaceId: string, total: number) => {
     const remaining = Math.max(0, total - previewCount(workspaceId));
     const nextCount = Math.min(MAX_SESSIONS_PREVIEW, remaining);
-    return nextCount > 0 ? `Show ${nextCount} more` : "Show more";
+    return nextCount > 0
+      ? translate("dashboard.show_more_count").replace("{count}", String(nextCount))
+      : translate("dashboard.show_more");
   };
   const activeWorkspaceKey = createMemo(() => props.activeWorkspaceId.trim());
   const expandedFilePaths = createMemo(() => {
@@ -497,11 +504,11 @@ export default function DashboardView(props: DashboardViewProps) {
     return Boolean(props.activeWorkspaceRoot.trim());
   });
   const fileExplorerUnavailableReason = createMemo(() => {
-    if (!isTauriRuntime()) return "File explorer is available in the desktop app.";
+    if (!isTauriRuntime()) return translate("dashboard.file_explorer_desktop_only");
     if (props.activeWorkspaceDisplay.workspaceType === "remote") {
-      return "File explorer is unavailable for remote workspaces.";
+      return translate("dashboard.file_explorer_remote_unavailable");
     }
-    if (!props.activeWorkspaceRoot.trim()) return "Select a workspace to browse files.";
+    if (!props.activeWorkspaceRoot.trim()) return translate("dashboard.file_explorer_select_workspace");
     return "";
   });
   const toggleExpandedPath = (path: string) => {
@@ -635,7 +642,7 @@ export default function DashboardView(props: DashboardViewProps) {
     });
   });
 
-  const navItem = (t: DashboardTab, label: any, icon: any) => {
+  const navItem = (t: DashboardTab, labelKey: string, icon: any) => {
     const active = () => props.tab === t;
     return (
       <button
@@ -647,7 +654,7 @@ export default function DashboardView(props: DashboardViewProps) {
         onClick={() => props.setTab(t)}
       >
         {icon}
-        {label}
+        {translate(labelKey)}
       </button>
     );
   };
@@ -949,9 +956,9 @@ export default function DashboardView(props: DashboardViewProps) {
                         <Show when={group.status === "error"}>
                           <span
                             class="text-[10px] px-2 py-0.5 rounded-full border border-red-7/50 text-red-11 bg-red-3/30"
-                            title={group.error ?? "Failed to load tasks"}
+                            title={group.error ?? translate("dashboard.load_tasks_failed")}
                           >
-                            Error
+                            {translate("dashboard.error")}
                           </span>
                         </Show>
                         {/* Session count intentionally hidden (not a useful signal and it can crowd the header actions). */}
@@ -968,7 +975,7 @@ export default function DashboardView(props: DashboardViewProps) {
                             createTaskInWorkspace(workspace().id);
                           }}
                           disabled={props.newTaskDisabled}
-                          aria-label="New task"
+                          aria-label={translate("dashboard.new_task")}
                         >
                           <Plus size={14} />
                         </button>
@@ -981,7 +988,7 @@ export default function DashboardView(props: DashboardViewProps) {
                               current === workspace().id ? null : workspace().id
                             );
                           }}
-                          aria-label="Workspace options"
+                          aria-label={translate("dashboard.workspace_options")}
                         >
                           <MoreHorizontal size={14} />
                         </button>
@@ -1000,7 +1007,7 @@ export default function DashboardView(props: DashboardViewProps) {
                               setWorkspaceMenuId(null);
                             }}
                           >
-                            Edit name
+                            {translate("dashboard.edit_workspace_name")}
                           </button>
                           <button
                             type="button"
@@ -1010,7 +1017,7 @@ export default function DashboardView(props: DashboardViewProps) {
                               setWorkspaceMenuId(null);
                             }}
                           >
-                            Share...
+                            {translate("dashboard.share_workspace")}
                           </button>
                           <Show when={workspace().workspaceType === "remote"}>
                             <button
@@ -1022,7 +1029,7 @@ export default function DashboardView(props: DashboardViewProps) {
                               }}
                               disabled={isConnecting()}
                             >
-                              Test connection
+                              {translate("dashboard.test_connection")}
                             </button>
                             <button
                               type="button"
@@ -1033,7 +1040,7 @@ export default function DashboardView(props: DashboardViewProps) {
                               }}
                               disabled={isConnecting()}
                             >
-                              Edit connection
+                              {translate("dashboard.edit_connection")}
                             </button>
                           </Show>
                           <Show when={workspace().sandboxContainerName?.trim()}>
@@ -1045,7 +1052,7 @@ export default function DashboardView(props: DashboardViewProps) {
                                 setWorkspaceMenuId(null);
                               }}
                             >
-                              Stop sandbox
+                              {translate("dashboard.stop_sandbox")}
                             </button>
                           </Show>
                           <button
@@ -1056,7 +1063,7 @@ export default function DashboardView(props: DashboardViewProps) {
                               setWorkspaceMenuId(null);
                             }}
                           >
-                            Remove workspace
+                            {translate("dashboard.remove_workspace")}
                           </button>
                         </div>
                       </Show>
@@ -1109,9 +1116,9 @@ export default function DashboardView(props: DashboardViewProps) {
                                 <Show when={group.status === "error"}>
                                   <div
                                     class="w-full px-3 py-2 text-xs text-red-11 ml-2 text-left rounded-lg bg-red-3/20 border border-red-7/40"
-                                    title={group.error ?? "Failed to load tasks"}
+                                    title={group.error ?? translate("dashboard.load_tasks_failed")}
                                   >
-                                    Failed to load tasks
+                                    {translate("dashboard.load_tasks_failed")}
                                   </div>
                                 </Show>
                               }
@@ -1154,8 +1161,12 @@ export default function DashboardView(props: DashboardViewProps) {
                                   onClick={() => createTaskInWorkspace(workspace().id)}
                                   disabled={props.newTaskDisabled}
                                 >
-                                  <span class="group-hover/empty:hidden">No tasks yet.</span>
-                                  <span class="hidden group-hover/empty:inline font-medium">+ New task</span>
+                                  <span class="group-hover/empty:hidden">
+                                    {translate("dashboard.no_tasks_yet")}
+                                  </span>
+                                  <span class="hidden group-hover/empty:inline font-medium">
+                                    + {translate("dashboard.new_task")}
+                                  </span>
                                 </button>
                               </Show>
 
@@ -1172,7 +1183,7 @@ export default function DashboardView(props: DashboardViewProps) {
                           }
                         >
                           <div class="w-full px-3 py-2 text-xs text-dls-secondary ml-2 text-left rounded-lg">
-                            Loading tasks...
+                            {translate("dashboard.loading_tasks")}
                           </div>
                         </Show>
                       </Show>
@@ -1190,7 +1201,7 @@ export default function DashboardView(props: DashboardViewProps) {
               onClick={() => setAddWorkspaceMenuOpen((prev) => !prev)}
             >
               <Plus size={14} />
-              Add a workspace
+              {translate("dashboard.add_workspace")}
             </button>
             <Show when={addWorkspaceMenuOpen()}>
               <div class="absolute left-0 right-0 top-full mt-2 rounded-lg border border-dls-border bg-dls-surface shadow-xl overflow-hidden z-20">
@@ -1203,7 +1214,7 @@ export default function DashboardView(props: DashboardViewProps) {
                   }}
                 >
                   <Plus size={12} />
-                  New workspace
+                  {translate("dashboard.add_workspace_new")}
                 </button>
                 <button
                   type="button"
@@ -1214,7 +1225,7 @@ export default function DashboardView(props: DashboardViewProps) {
                   }}
                 >
                   <Plus size={12} />
-                  Connect remote
+                  {translate("dashboard.add_workspace_remote")}
                 </button>
                 <button
                   type="button"
@@ -1226,7 +1237,7 @@ export default function DashboardView(props: DashboardViewProps) {
                   }}
                 >
                   <Plus size={12} />
-                  Import config
+                  {translate("dashboard.add_workspace_import")}
                 </button>
               </div>
             </Show>
@@ -1302,6 +1313,7 @@ export default function DashboardView(props: DashboardViewProps) {
             </Match>
             <Match when={props.tab === "task-center"}>
               <TaskCenterView
+                clientConnected={props.clientConnected}
                 itemsByStatus={props.taskCenterItemsByStatus}
                 status={props.taskCenterStatus}
                 error={props.taskCenterError}
@@ -1473,6 +1485,8 @@ export default function DashboardView(props: DashboardViewProps) {
                   toggleUpdateAutoDownload={props.toggleUpdateAutoDownload}
                   themeMode={props.themeMode}
                   setThemeMode={props.setThemeMode}
+                  language={props.language}
+                  setLanguage={props.setLanguage}
                   updateStatus={props.updateStatus}
                   updateEnv={props.updateEnv}
                   appVersion={props.appVersion}
@@ -1599,7 +1613,7 @@ export default function DashboardView(props: DashboardViewProps) {
               onClick={() => props.setTab("scheduled")}
             >
               <History size={18} />
-              Automations
+              {translate("dashboard.automations")}
             </button>
             <button
               class={`flex flex-col items-center gap-1 text-xs ${
@@ -1608,7 +1622,7 @@ export default function DashboardView(props: DashboardViewProps) {
               onClick={() => props.setTab("task-center")}
             >
               <ClipboardList size={18} />
-              Task Center
+              {translate("dashboard.task_center")}
             </button>
             <button
               class={`flex flex-col items-center gap-1 text-xs ${
@@ -1617,7 +1631,7 @@ export default function DashboardView(props: DashboardViewProps) {
               onClick={() => props.setTab("skills")}
             >
               <Zap size={18} />
-              Skills
+              {translate("dashboard.skills")}
             </button>
             <button
               class={`flex flex-col items-center gap-1 text-xs ${
@@ -1626,7 +1640,7 @@ export default function DashboardView(props: DashboardViewProps) {
               onClick={() => props.setTab("plugins")}
             >
               <Cpu size={18} />
-              Plugins
+              {translate("dashboard.plugins")}
             </button>
             <button
               class={`flex flex-col items-center gap-1 text-xs ${
@@ -1635,7 +1649,7 @@ export default function DashboardView(props: DashboardViewProps) {
               onClick={() => props.setTab("mcp")}
             >
               <Box size={18} />
-              Apps
+              {translate("dashboard.mcps")}
             </button>
             <button
               class={`flex flex-col items-center gap-1 text-xs ${
@@ -1644,7 +1658,7 @@ export default function DashboardView(props: DashboardViewProps) {
               onClick={() => props.setTab("identities")}
             >
               <MessageCircle size={18} />
-              IDs
+              {translate("dashboard.identities")}
             </button>
             <button
               class={`flex flex-col items-center gap-1 text-xs ${
@@ -1653,7 +1667,7 @@ export default function DashboardView(props: DashboardViewProps) {
               onClick={() => props.setTab("config")}
             >
               <SlidersHorizontal size={18} />
-              Config
+              {translate("dashboard.config")}
             </button>
           </div>
         </nav>
@@ -1670,7 +1684,7 @@ export default function DashboardView(props: DashboardViewProps) {
             }`}
             onClick={() => setRightSidebarTab("work")}
           >
-            工作区
+            {translate("dashboard.sidebar_workspaces")}
           </button>
           <button
             type="button"
@@ -1681,19 +1695,19 @@ export default function DashboardView(props: DashboardViewProps) {
             }`}
             onClick={() => setRightSidebarTab("files")}
           >
-            资源
+            {translate("dashboard.sidebar_files")}
           </button>
         </div>
 
         <Show when={rightSidebarTab() === "work"}>
           <div class="space-y-1 pt-3">
-            {navItem("scheduled", "Automations", <History size={18} />)}
-            {navItem("task-center", "Task Center", <ClipboardList size={18} />)}
-            {navItem("skills", "Skills", <Zap size={18} />)}
-            {navItem("plugins", "Plugins", <Cpu size={18} />)}
-            {navItem("mcp", "Apps", <Box size={18} />)}
-            {navItem("identities", "Identities", <MessageCircle size={18} />)}
-            {navItem("config", "Config", <SlidersHorizontal size={18} />)}
+            {navItem("scheduled", "dashboard.automations", <History size={18} />)}
+            {navItem("task-center", "dashboard.task_center", <ClipboardList size={18} />)}
+            {navItem("skills", "dashboard.skills", <Zap size={18} />)}
+            {navItem("plugins", "dashboard.plugins", <Cpu size={18} />)}
+            {navItem("mcp", "dashboard.mcps", <Box size={18} />)}
+            {navItem("identities", "dashboard.identities", <MessageCircle size={18} />)}
+            {navItem("config", "dashboard.config", <SlidersHorizontal size={18} />)}
           </div>
         </Show>
 

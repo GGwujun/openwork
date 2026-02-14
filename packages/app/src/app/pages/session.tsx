@@ -57,6 +57,7 @@ import { buildOpenworkWorkspaceBaseUrl, createOpenworkServerClient } from "../li
 import type { OpenworkServerClient, OpenworkServerSettings, OpenworkServerStatus } from "../lib/openwork-server";
 import { join } from "@tauri-apps/api/path";
 import { formatRelativeTime, isTauriRuntime, normalizeDirectoryPath, parseTemplateFrontmatter } from "../utils";
+import { currentLocale, t } from "../../i18n";
 
 import browserSetupTemplate from "../data/commands/browser-setup.md?raw";
 import soulSetupTemplate from "../data/commands/give-me-a-soul.md?raw";
@@ -207,6 +208,7 @@ const SOUL_SETUP_TEMPLATE = (() => {
 })();
 
 export default function SessionView(props: SessionViewProps) {
+  const translate = (key: string) => t(key, currentLocale());
   let messagesEndEl: HTMLDivElement | undefined;
   let chatContainerEl: HTMLDivElement | undefined;
   let agentPickerRef: HTMLDivElement | undefined;
@@ -443,11 +445,13 @@ export default function SessionView(props: SessionViewProps) {
     return Boolean(props.activeWorkspaceRoot.trim());
   });
   const fileExplorerUnavailableReason = createMemo(() => {
-    if (!isTauriRuntime()) return "File explorer is available in the desktop app.";
+    if (!isTauriRuntime()) return translate("dashboard.file_explorer_desktop_only");
     if (props.activeWorkspaceDisplay.workspaceType === "remote") {
-      return "File explorer is unavailable for remote workspaces.";
+      return translate("dashboard.file_explorer_remote_unavailable");
     }
-    if (!props.activeWorkspaceRoot.trim()) return "Select a workspace to browse files.";
+    if (!props.activeWorkspaceRoot.trim()) {
+      return translate("dashboard.file_explorer_select_workspace");
+    }
     return "";
   });
   const toggleExpandedPath = (path: string) => {
@@ -2282,7 +2286,7 @@ export default function SessionView(props: SessionViewProps) {
             }`}
             onClick={() => setRightSidebarTab("work")}
           >
-            工作区
+            {translate("dashboard.sidebar_workspaces")}
           </button>
           <button
             type="button"
@@ -2293,7 +2297,7 @@ export default function SessionView(props: SessionViewProps) {
             }`}
             onClick={() => setRightSidebarTab("files")}
           >
-            资源
+            {translate("dashboard.sidebar_files")}
           </button>
         </div>
 
@@ -2320,7 +2324,7 @@ export default function SessionView(props: SessionViewProps) {
                 }}
               >
                 <History size={18} />
-                Automations
+                {translate("dashboard.automations")}
               </button>
               <button
                 type="button"
@@ -2335,7 +2339,7 @@ export default function SessionView(props: SessionViewProps) {
                 }}
               >
                 <KanbanSquare size={18} />
-                Task Center
+                {translate("dashboard.task_center")}
               </button>
               <button
                 type="button"
@@ -2350,7 +2354,7 @@ export default function SessionView(props: SessionViewProps) {
                 }}
               >
                 <Zap size={18} />
-                Skills
+                {translate("dashboard.skills")}
               </button>
               <button
                 type="button"
@@ -2365,7 +2369,7 @@ export default function SessionView(props: SessionViewProps) {
                 }}
               >
                 <Cpu size={18} />
-                Plugins
+                {translate("dashboard.plugins")}
               </button>
               <button
                 type="button"
@@ -2380,7 +2384,7 @@ export default function SessionView(props: SessionViewProps) {
                 }}
               >
                 <Box size={18} />
-                Apps
+                {translate("dashboard.mcps")}
               </button>
               <button
                 type="button"
@@ -2395,7 +2399,7 @@ export default function SessionView(props: SessionViewProps) {
                 }}
               >
                 <MessageCircle size={18} />
-                Identities
+                {translate("dashboard.identities")}
               </button>
               <button
                 type="button"
@@ -2407,7 +2411,7 @@ export default function SessionView(props: SessionViewProps) {
                 onClick={openConfig}
               >
                 <SlidersHorizontal size={18} />
-                Config
+                {translate("dashboard.config")}
               </button>
             </div>
           </div>

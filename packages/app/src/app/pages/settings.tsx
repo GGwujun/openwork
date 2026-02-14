@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onMount } from "solid-js";
 
 import { formatBytes, formatRelativeTime, isTauriRuntime } from "../utils";
+import { LANGUAGE_OPTIONS, t, type Language } from "../../i18n";
 
 import Button from "../components/button";
 import { HardDrive, MessageCircle, PlugZap, RefreshCcw, Shield, Smartphone, X } from "lucide-solid";
@@ -69,6 +70,8 @@ export type SettingsViewProps = {
   editModelVariant: () => void;
   themeMode: "light" | "dark" | "system";
   setThemeMode: (value: "light" | "dark" | "system") => void;
+  language: Language;
+  setLanguage: (value: Language) => void;
   updateAutoCheck: boolean;
   toggleUpdateAutoCheck: () => void;
   updateAutoDownload: boolean;
@@ -136,6 +139,7 @@ export function OwpenbotSettings(_props: {
 
 export default function SettingsView(props: SettingsViewProps) {
   const [buildInfo, setBuildInfo] = createSignal<AppBuildInfo | null>(null);
+  const translate = (key: string) => t(key, props.language);
   const updateState = () => props.updateStatus?.state ?? "idle";
   const updateNotes = () => props.updateStatus?.notes ?? null;
   const updateVersion = () => props.updateStatus?.version ?? null;
@@ -441,13 +445,13 @@ export default function SettingsView(props: SettingsViewProps) {
   const tabLabel = (tab: SettingsTab) => {
     switch (tab) {
       case "model":
-        return "Model";
+        return translate("settings.model_title");
       case "advanced":
-        return "Advanced";
+        return translate("settings.advanced_title");
       case "debug":
-        return "Debug";
+        return translate("settings.debug_tab");
       default:
-        return "General";
+        return translate("settings.general_tab");
     }
   };
 
@@ -609,22 +613,24 @@ export default function SettingsView(props: SettingsViewProps) {
         <Match when={activeTab() === "general"}>
           <div class="space-y-6">
             <div class="bg-gray-2/30 border border-gray-6/50 rounded-2xl p-5 space-y-3">
-              <div class="text-sm font-medium text-gray-12">Connection</div>
+              <div class="text-sm font-medium text-gray-12">{translate("settings.connection_title")}</div>
               <div class="text-xs text-gray-10">{props.headerStatus}</div>
               <div class="text-xs text-gray-7 font-mono">{props.baseUrl}</div>
               <div class="pt-2 flex flex-wrap gap-2">
                 <Button variant="secondary" onClick={props.toggleDeveloperMode}>
                   <Shield size={16} />
-                  {props.developerMode ? "Disable Developer Mode" : "Enable Developer Mode"}
+                  {props.developerMode
+                    ? translate("settings.disable_developer_mode")
+                    : translate("settings.enable_developer_mode")}
                 </Button>
                 <Show when={isLocalEngineRunning()}>
                   <Button variant="danger" onClick={props.stopHost} disabled={props.busy}>
-                    Stop local server
+                    {translate("settings.stop_engine")}
                   </Button>
                 </Show>
                 <Show when={!isLocalEngineRunning() && props.openworkServerStatus === "connected"}>
                   <Button variant="outline" onClick={props.stopHost} disabled={props.busy}>
-                    Disconnect server
+                    {translate("settings.disconnect")}
                   </Button>
                 </Show>
               </div>
@@ -668,8 +674,8 @@ export default function SettingsView(props: SettingsViewProps) {
 
             <div class="bg-gray-2/30 border border-gray-6/50 rounded-2xl p-5 space-y-4">
               <div>
-                <div class="text-sm font-medium text-gray-12">Appearance</div>
-                <div class="text-xs text-gray-10">Match the system or force light/dark mode.</div>
+                <div class="text-sm font-medium text-gray-12">{translate("settings.appearance_title")}</div>
+                <div class="text-xs text-gray-10">{translate("settings.appearance_hint")}</div>
               </div>
 
               <div class="flex flex-wrap gap-2">
@@ -679,7 +685,7 @@ export default function SettingsView(props: SettingsViewProps) {
                   onClick={() => props.setThemeMode("system")}
                   disabled={props.busy}
                 >
-                  System
+                  {translate("settings.theme_system")}
                 </Button>
                 <Button
                   variant={props.themeMode === "light" ? "secondary" : "outline"}
@@ -687,7 +693,7 @@ export default function SettingsView(props: SettingsViewProps) {
                   onClick={() => props.setThemeMode("light")}
                   disabled={props.busy}
                 >
-                  Light
+                  {translate("settings.theme_light")}
                 </Button>
                 <Button
                   variant={props.themeMode === "dark" ? "secondary" : "outline"}
@@ -695,12 +701,31 @@ export default function SettingsView(props: SettingsViewProps) {
                   onClick={() => props.setThemeMode("dark")}
                   disabled={props.busy}
                 >
-                  Dark
+                  {translate("settings.theme_dark")}
                 </Button>
               </div>
 
               <div class="text-xs text-gray-7">
-                System mode follows your OS preference automatically.
+                {translate("settings.theme_system_hint")}
+              </div>
+
+              <div class="pt-2 space-y-2">
+                <div class="text-xs text-gray-10">{translate("settings.language")}</div>
+                <div class="text-xs text-gray-7">{translate("settings.language.description")}</div>
+                <div class="flex flex-wrap gap-2">
+                  <For each={LANGUAGE_OPTIONS}>
+                    {(option) => (
+                      <Button
+                        variant={props.language === option.value ? "secondary" : "outline"}
+                        class="text-xs h-8 py-0 px-3"
+                        onClick={() => props.setLanguage(option.value)}
+                        disabled={props.busy}
+                      >
+                        {option.nativeName}
+                      </Button>
+                    )}
+                  </For>
+                </div>
               </div>
             </div>
           </div>
@@ -710,8 +735,8 @@ export default function SettingsView(props: SettingsViewProps) {
           <div class="space-y-6">
             <div class="bg-gray-2/30 border border-gray-6/50 rounded-2xl p-5 space-y-4">
               <div>
-                <div class="text-sm font-medium text-gray-12">Model</div>
-                <div class="text-xs text-gray-10">Defaults + thinking controls for runs.</div>
+                <div class="text-sm font-medium text-gray-12">{translate("settings.model_title")}</div>
+                <div class="text-xs text-gray-10">{translate("settings.model_hint")}</div>
               </div>
 
               <div class="flex items-center justify-between bg-gray-1 p-3 rounded-xl border border-gray-6 gap-3">
@@ -731,8 +756,8 @@ export default function SettingsView(props: SettingsViewProps) {
 
               <div class="flex items-center justify-between bg-gray-1 p-3 rounded-xl border border-gray-6 gap-3">
                 <div class="min-w-0">
-                  <div class="text-sm text-gray-12">Thinking</div>
-                  <div class="text-xs text-gray-7">Show thinking parts (Developer mode only).</div>
+                  <div class="text-sm text-gray-12">{translate("settings.thinking_label")}</div>
+                  <div class="text-xs text-gray-7">{translate("settings.thinking_hint")}</div>
                 </div>
                 <Button
                   variant="outline"
@@ -746,7 +771,7 @@ export default function SettingsView(props: SettingsViewProps) {
 
               <div class="flex items-center justify-between bg-gray-1 p-3 rounded-xl border border-gray-6 gap-3">
                 <div class="min-w-0">
-                  <div class="text-sm text-gray-12">Model variant</div>
+                  <div class="text-sm text-gray-12">{translate("settings.model_variant_label")}</div>
                   <div class="text-xs text-gray-7 font-mono truncate">{props.modelVariantLabel}</div>
                 </div>
                 <Button
@@ -767,8 +792,8 @@ export default function SettingsView(props: SettingsViewProps) {
             <div class="bg-gray-2/30 border border-gray-6/50 rounded-2xl p-5 space-y-3">
               <div class="flex items-start justify-between gap-4">
                 <div>
-                  <div class="text-sm font-medium text-gray-12">Updates</div>
-                  <div class="text-xs text-gray-10">Keep OpenWork up to date.</div>
+                  <div class="text-sm font-medium text-gray-12">{translate("settings.updates_title")}</div>
+                  <div class="text-xs text-gray-10">{translate("settings.updates_hint")}</div>
                 </div>
                 <div class="text-xs text-gray-7 font-mono">{props.appVersion ? `v${props.appVersion}` : ""}</div>
               </div>
@@ -782,8 +807,8 @@ export default function SettingsView(props: SettingsViewProps) {
                       <>
                         <div class="flex items-center justify-between bg-gray-1 p-3 rounded-xl border border-gray-6">
                           <div class="space-y-0.5">
-                            <div class="text-sm text-gray-12">Automatic checks</div>
-                            <div class="text-xs text-gray-7">Once per day (quiet)</div>
+                            <div class="text-sm text-gray-12">{translate("settings.automatic_checks_label")}</div>
+                            <div class="text-xs text-gray-7">{translate("settings.automatic_checks_hint")}</div>
                           </div>
                           <button
                             class={`px-3 py-1 rounded-full text-xs font-medium border transition-colors ${
@@ -828,11 +853,16 @@ export default function SettingsView(props: SettingsViewProps) {
                             </div>
                             <Show when={updateState() === "idle" && updateLastCheckedAt()}>
                               <div class="text-xs text-gray-7">
-                                Last checked {formatRelativeTime(updateLastCheckedAt() as number)}
+                                {translate("settings.last_checked_time").replace(
+                                  "{time}",
+                                  formatRelativeTime(updateLastCheckedAt() as number),
+                                )}
                               </div>
                             </Show>
                             <Show when={updateState() === "available" && updateDate()}>
-                              <div class="text-xs text-gray-7">Published {updateDate()}</div>
+                              <div class="text-xs text-gray-7">
+                                {translate("settings.published_date").replace("{date}", updateDate() as string)}
+                              </div>
                             </Show>
                             <Show when={updateState() === "downloading"}>
                               <div class="text-xs text-gray-7">
@@ -891,19 +921,19 @@ export default function SettingsView(props: SettingsViewProps) {
                     }
                   >
                     <div class="rounded-xl bg-gray-1/20 border border-gray-6 p-3 text-sm text-gray-11">
-                      {props.updateEnv?.reason ?? "Updates are not supported in this environment."}
+                      {props.updateEnv?.reason ?? translate("settings.updates_not_supported")}
                     </div>
                   </Show>
                 }
               >
                 <div class="rounded-xl bg-gray-1/20 border border-gray-6 p-3 text-sm text-gray-11">
-                  Updates are only available in the desktop app.
+                  {translate("settings.updates_desktop_only")}
                 </div>
               </Show>
             </div>
 
             <div class="bg-gray-2/30 border border-gray-6/50 rounded-2xl p-5 space-y-3">
-              <div class="text-sm font-medium text-gray-12">Startup</div>
+              <div class="text-sm font-medium text-gray-12">{translate("settings.startup_title")}</div>
 
               <div class="flex items-center justify-between bg-gray-1 p-3 rounded-xl border border-gray-6">
                 <div class="flex items-center gap-3">
@@ -919,17 +949,17 @@ export default function SettingsView(props: SettingsViewProps) {
                   <span class="text-sm font-medium text-gray-12">{startupLabel()}</span>
                 </div>
                 <Button variant="outline" class="text-xs h-8 py-0 px-3" onClick={props.stopHost} disabled={props.busy}>
-                  Switch
+                  {translate("settings.switch_mode")}
                 </Button>
               </div>
 
               <Button variant="secondary" class="w-full justify-between group" onClick={props.onResetStartupPreference}>
-                <span>Reset startup preference</span>
+                <span>{translate("settings.reset_startup_label")}</span>
                 <RefreshCcw size={14} class="opacity-80 group-hover:rotate-180 transition-transform" />
               </Button>
 
               <p class="text-xs text-gray-7">
-                This clears your saved preference and shows the connection choice on next launch.
+                {translate("settings.reset_startup_hint")}
               </p>
             </div>
 
@@ -1022,38 +1052,38 @@ export default function SettingsView(props: SettingsViewProps) {
 
               <div class="flex items-center justify-between bg-gray-1 p-3 rounded-xl border border-gray-6 gap-3">
                 <div class="min-w-0">
-                  <div class="text-sm text-gray-12">Reset onboarding</div>
-                  <div class="text-xs text-gray-7">Clears OpenWork preferences and restarts the app.</div>
+                  <div class="text-sm text-gray-12">{translate("settings.reset_onboarding_label")}</div>
+                  <div class="text-xs text-gray-7">{translate("settings.reset_onboarding_hint")}</div>
                 </div>
                 <Button
                   variant="outline"
                   class="text-xs h-8 py-0 px-3 shrink-0"
                   onClick={() => props.openResetModal("onboarding")}
                   disabled={props.busy || props.resetModalBusy || props.anyActiveRuns}
-                  title={props.anyActiveRuns ? "Stop active runs to reset" : ""}
+                  title={props.anyActiveRuns ? translate("settings.stop_runs_to_reset") : ""}
                 >
-                  Reset
+                  {translate("settings.reset")}
                 </Button>
               </div>
 
               <div class="flex items-center justify-between bg-gray-1 p-3 rounded-xl border border-gray-6 gap-3">
                 <div class="min-w-0">
-                  <div class="text-sm text-gray-12">Reset app data</div>
-                  <div class="text-xs text-gray-7">More aggressive. Clears OpenWork cache + app data.</div>
+                  <div class="text-sm text-gray-12">{translate("settings.reset_app_data_label")}</div>
+                  <div class="text-xs text-gray-7">{translate("settings.reset_app_data_hint")}</div>
                 </div>
                 <Button
                   variant="danger"
                   class="text-xs h-8 py-0 px-3 shrink-0"
                   onClick={() => props.openResetModal("all")}
                   disabled={props.busy || props.resetModalBusy || props.anyActiveRuns}
-                  title={props.anyActiveRuns ? "Stop active runs to reset" : ""}
+                  title={props.anyActiveRuns ? translate("settings.stop_runs_to_reset") : ""}
                 >
-                  Reset
+                  {translate("settings.reset")}
                 </Button>
               </div>
 
               <div class="text-xs text-gray-7">
-                Requires typing <span class="font-mono text-gray-11">RESET</span> and will restart the app.
+                {translate("settings.reset_requires_hint")}
               </div>
             </div>
           </div>
@@ -1062,15 +1092,15 @@ export default function SettingsView(props: SettingsViewProps) {
         <Match when={activeTab() === "debug"}>
           <Show when={props.developerMode}>
             <section>
-              <h3 class="text-sm font-medium text-gray-11 uppercase tracking-wider mb-4">Developer</h3>
+              <h3 class="text-sm font-medium text-gray-11 uppercase tracking-wider mb-4">
+                {translate("settings.developer_title")}
+              </h3>
 
               <div class="space-y-4">
                 <div class="bg-gray-2/30 border border-gray-6/50 rounded-2xl p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                   <div class="min-w-0">
-                    <div class="text-sm text-gray-12">OpenCode cache</div>
-                    <div class="text-xs text-gray-7">
-                      Repairs cached data used to start the engine. Safe to run.
-                    </div>
+                    <div class="text-sm text-gray-12">{translate("settings.opencode_cache_label")}</div>
+                    <div class="text-xs text-gray-7">{translate("settings.opencode_cache_hint")}</div>
                     <Show when={props.cacheRepairResult}>
                       <div class="text-xs text-gray-11 mt-2">{props.cacheRepairResult}</div>
                     </Show>
@@ -1080,9 +1110,11 @@ export default function SettingsView(props: SettingsViewProps) {
                     class="text-xs h-8 py-0 px-3 shrink-0"
                     onClick={props.repairOpencodeCache}
                     disabled={props.cacheRepairBusy || !isTauriRuntime()}
-                    title={isTauriRuntime() ? "" : "Cache repair requires the desktop app"}
+                    title={isTauriRuntime() ? "" : translate("settings.cache_repair_requires_desktop")}
                   >
-                    {props.cacheRepairBusy ? "Repairing cache" : "Repair cache"}
+                    {props.cacheRepairBusy
+                      ? translate("settings.repairing_cache")
+                      : translate("settings.repair_cache")}
                   </Button>
                 </div>
 
