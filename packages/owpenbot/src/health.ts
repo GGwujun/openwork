@@ -13,6 +13,7 @@ export type HealthSnapshot = {
     telegram: boolean;
     whatsapp: boolean;
     slack: boolean;
+    wecom: boolean;
   };
   config: {
     groupsEnabled: boolean;
@@ -35,12 +36,23 @@ export type SlackIdentityItem = {
   running: boolean;
 };
 
+export type WecomIdentityItem = {
+  id: string;
+  mode: "ai-bot" | "app";
+  enabled: boolean;
+  running: boolean;
+};
+
 export type TelegramIdentitiesResult = {
   items: TelegramIdentityItem[];
 };
 
 export type SlackIdentitiesResult = {
   items: SlackIdentityItem[];
+};
+
+export type WecomIdentitiesResult = {
+  items: WecomIdentityItem[];
 };
 
 export type UpsertIdentityResult = {
@@ -70,6 +82,19 @@ export type SlackIdentityUpsertInput = {
   id?: string;
   botToken: string;
   appToken: string;
+  enabled?: boolean;
+  directory?: string;
+};
+
+export type WecomIdentityUpsertInput = {
+  id?: string;
+  mode?: "ai-bot" | "app";
+  token?: string;
+  encodingAesKey?: string;
+  corpId?: string;
+  agentId?: string;
+  secret?: string;
+  webhookPath?: string;
   enabled?: boolean;
   directory?: string;
 };
@@ -111,6 +136,9 @@ export type HealthHandlers = {
   listSlackIdentities?: () => Promise<SlackIdentitiesResult>;
   upsertSlackIdentity?: (input: SlackIdentityUpsertInput) => Promise<UpsertIdentityResult>;
   deleteSlackIdentity?: (id: string) => Promise<DeleteIdentityResult>;
+  listWecomIdentities?: () => Promise<WecomIdentitiesResult>;
+  upsertWecomIdentity?: (input: WecomIdentityUpsertInput) => Promise<UpsertIdentityResult>;
+  deleteWecomIdentity?: (id: string) => Promise<DeleteIdentityResult>;
   listBindings?: (filters?: { channel?: string; identityId?: string }) => Promise<BindingsListResult>;
   setBinding?: (input: { channel: string; identityId?: string; peerId: string; directory: string }) => Promise<void>;
   clearBinding?: (input: { channel: string; identityId?: string; peerId: string }) => Promise<void>;
@@ -413,6 +441,105 @@ export function startHealthServer(
           const result = await handlers.deleteSlackIdentity(id);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ ok: true, slack: result }));
+          return;
+        } catch (error) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: String(error) }));
+          return;
+        }
+      }
+
+      // GET /identities/wecom
+      if (pathname === "/identities/wecom" && req.method === "GET") {
+        if (!handlers.listWecomIdentities) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "Not supported" }));
+          return;
+        }
+        try {
+          const result = await handlers.listWecomIdentities();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true, ...result }));
+          return;
+        } catch (error) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: String(error) }));
+          return;
+        }
+      }
+
+      // POST /identities/wecom
+      if (pathname === "/identities/wecom" && req.method === "POST") {
+        if (!handlers.upsertWecomIdentity) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "Not supported" }));
+          return;
+        }
+        let raw = "";
+        for await (const chunk of req) {
+          raw += chunk.toString();
+          if (raw.length > 1024 * 1024) {
+            res.writeHead(413, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: "Payload too large" }));
+            return;
+          }
+        }
+        try {
+          const payload = JSON.parse(raw || "{}");
+          const token = typeof payload.token === "string" ? payload.token.trim() : "";
+          const encodingAesKey = typeof payload.encodingAesKey === "string" ? payload.encodingAesKey.trim() : "";
+          const id = typeof payload.id === "string" ? payload.id.trim() : undefined;
+          const mode = typeof payload.mode === "string" ? payload.mode.trim().toLowerCase() : undefined;
+          const corpId = typeof payload.corpId === "string" ? payload.corpId.trim() : undefined;
+          const agentId = typeof payload.agentId === "string" ? payload.agentId.trim() : undefined;
+          const secret = typeof payload.secret === "string" ? payload.secret.trim() : undefined;
+          const webhookPath = typeof payload.webhookPath === "string" ? payload.webhookPath.trim() : undefined;
+          const directory = typeof payload.directory === "string" ? payload.directory.trim() : undefined;
+          const enabled = payload.enabled === undefined ? undefined : payload.enabled === true || payload.enabled === "true";
+          if (mode !== "app" && (!token || !encodingAesKey)) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ ok: false, error: "token and encodingAesKey are required for ai-bot mode" }));
+            return;
+          }
+          const result = await handlers.upsertWecomIdentity({
+            id,
+            ...(token ? { token } : {}),
+            ...(encodingAesKey ? { encodingAesKey } : {}),
+            ...(mode === "app" || mode === "ai-bot" ? { mode: mode as "app" | "ai-bot" } : {}),
+            ...(corpId ? { corpId } : {}),
+            ...(agentId ? { agentId } : {}),
+            ...(secret ? { secret } : {}),
+            ...(webhookPath ? { webhookPath } : {}),
+            ...(directory ? { directory } : {}),
+            ...(enabled === undefined ? {} : { enabled }),
+          });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true, wecom: result }));
+          return;
+        } catch (error) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: String(error) }));
+          return;
+        }
+      }
+
+      // DELETE /identities/wecom/:id
+      if (pathname.startsWith("/identities/wecom/") && req.method === "DELETE") {
+        if (!handlers.deleteWecomIdentity) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "Not supported" }));
+          return;
+        }
+        const id = pathname.slice("/identities/wecom/".length).trim();
+        if (!id) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: false, error: "id is required" }));
+          return;
+        }
+        try {
+          const result = await handlers.deleteWecomIdentity(id);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ ok: true, wecom: result }));
           return;
         } catch (error) {
           res.writeHead(500, { "Content-Type": "application/json" });

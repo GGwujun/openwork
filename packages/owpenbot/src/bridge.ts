@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import type { Logger } from "pino";
 
-import type { Config, ChannelName, OwpenbotConfigFile } from "./config.js";
+import type { Config, ChannelName, OwpenbotConfigFile, WecomIdentity } from "./config.js";
 import { readConfigFile, writeConfigFile } from "./config.js";
 import { BridgeStore } from "./db.js";
 import { normalizeEvent } from "./events.js";
@@ -14,6 +14,7 @@ import { buildPermissionRules, createClient } from "./opencode.js";
 import { chunkText, formatInputSummary, truncateText } from "./text.js";
 import { createSlackAdapter } from "./slack.js";
 import { createTelegramAdapter } from "./telegram.js";
+import { createWecomAdapter } from "./wecom.js";
 
 type Adapter = {
   key: string;
@@ -133,6 +134,7 @@ const TOOL_LABELS: Record<string, string> = {
 const CHANNEL_LABELS: Record<ChannelName, string> = {
   telegram: "Telegram",
   slack: "Slack",
+  wecom: "WeCom",
 };
 
 const TYPING_INTERVAL_MS = 6000;
@@ -199,10 +201,14 @@ export async function startBridge(config: Config, logger: Logger, reporter?: Bri
     if (!id) return "";
     if (channel === "telegram") {
       const bot = config.telegramBots.find((entry) => entry.id === id);
-      return typeof (bot as any)?.directory === "string" ? String((bot as any).directory).trim() : "";
+      return typeof bot?.directory === "string" ? bot.directory.trim() : "";
     }
-    const app = config.slackApps.find((entry) => entry.id === id);
-    return typeof (app as any)?.directory === "string" ? String((app as any).directory).trim() : "";
+    if (channel === "slack") {
+      const app = config.slackApps.find((entry) => entry.id === id);
+      return typeof app?.directory === "string" ? app.directory.trim() : "";
+    }
+    const app = config.wecomApps.find((entry) => entry.id === id);
+    return typeof app?.directory === "string" ? app.directory.trim() : "";
   };
 
   const getClient = (directory?: string | null) => {
@@ -299,6 +305,18 @@ export async function startBridge(config: Config, logger: Logger, reporter?: Bri
       const key = adapterKey("slack", app.id);
       logger.debug({ identityId: app.id }, "slack adapter enabled");
       const base = createSlackAdapter(app, config, logger, handleInbound);
+      adapters.set(key, { ...base, key });
+    }
+
+    const enabledWecom = config.wecomApps.filter((app) => app.enabled !== false);
+    if (enabledWecom.length === 0) {
+      logger.info("wecom adapters disabled");
+      reportStatus?.("WeCom adapters disabled.");
+    }
+    for (const app of enabledWecom) {
+      const key = adapterKey("wecom", app.id);
+      logger.debug({ identityId: app.id, mode: app.mode }, "wecom adapter enabled");
+      const base = createWecomAdapter(app, config, logger, handleInbound);
       adapters.set(key, { ...base, key });
     }
   }
@@ -427,6 +445,7 @@ export async function startBridge(config: Config, logger: Logger, reporter?: Bri
           // WhatsApp removed; keep field for backward compatibility.
           whatsapp: false,
           slack: Array.from(adapters.keys()).some((key) => key.startsWith("slack:")),
+          wecom: Array.from(adapters.keys()).some((key) => key.startsWith("wecom:")),
         },
         config: {
           groupsEnabled,
@@ -779,12 +798,237 @@ export async function startBridge(config: Config, logger: Logger, reporter?: Bri
           return { id, deleted };
         },
 
+        listWecomIdentities: async () => {
+          return {
+            items: config.wecomApps.map((app) => ({
+              id: app.id,
+              mode: app.mode,
+              enabled: app.enabled !== false,
+              running: adapters.has(adapterKey("wecom", app.id)),
+            })),
+          };
+        },
+        upsertWecomIdentity: async (input: {
+          id?: string;
+          mode?: "ai-bot" | "app";
+          token?: string;
+          encodingAesKey?: string;
+          corpId?: string;
+          agentId?: string;
+          secret?: string;
+          webhookPath?: string;
+          enabled?: boolean;
+          directory?: string;
+        }) => {
+          const token = input.token?.trim() ?? "";
+          const encodingAesKey = input.encodingAesKey?.trim() ?? "";
+          const id = normalizeIdentityId(input.id);
+          if (id === "env") throw new Error("identity id 'env' is reserved");
+          const mode = input.mode === "app" ? "app" : "ai-bot";
+          const enabled = input.enabled !== false;
+          const directoryInput = typeof input.directory === "string" ? input.directory.trim() : "";
+          const corpId = typeof input.corpId === "string" ? input.corpId.trim() : "";
+          const agentId = typeof input.agentId === "string" ? input.agentId.trim() : "";
+          const secret = typeof input.secret === "string" ? input.secret.trim() : "";
+          const webhookPath = typeof input.webhookPath === "string" ? input.webhookPath.trim() : "";
+          if (mode === "ai-bot" && (!token || !encodingAesKey)) {
+            throw new Error("token and encodingAesKey are required for ai-bot mode");
+          }
+          if (mode === "app" && (!corpId || !agentId || !secret)) {
+            throw new Error("corpId, agentId, and secret are required for app mode");
+          }
+
+          const { config: current } = readConfigFile(config.configPath);
+          const wecom = current.channels?.wecom;
+          const apps = Array.isArray(wecom?.apps) ? (wecom.apps as unknown[]) : [];
+          const nextApps: any[] = [];
+          let found = false;
+          for (const entry of apps) {
+            if (!entry || typeof entry !== "object") continue;
+            const record = entry as Record<string, unknown>;
+            const entryId = normalizeIdentityId(typeof record.id === "string" ? record.id : "default");
+            if (entryId !== id) {
+              nextApps.push(entry);
+              continue;
+            }
+            found = true;
+            const prevDir = typeof record.directory === "string" ? record.directory.trim() : "";
+            const prevMode = typeof record.mode === "string" ? record.mode : "ai-bot";
+            const nextDir = directoryInput || prevDir;
+            const nextMode = input.mode ? mode : (prevMode === "app" ? "app" : "ai-bot");
+            const prevToken = typeof record.token === "string" ? record.token.trim() : "";
+            const prevEncodingAesKey = typeof record.encodingAesKey === "string" ? record.encodingAesKey.trim() : "";
+            const prevCorpId = typeof record.corpId === "string" ? record.corpId.trim() : "";
+            const prevAgentId = typeof record.agentId === "string" ? record.agentId.trim() : "";
+            const prevSecret = typeof record.secret === "string" ? record.secret.trim() : "";
+            const prevWebhookPath = typeof record.webhookPath === "string" ? record.webhookPath.trim() : "";
+            const nextToken = nextMode === "ai-bot" ? (token || prevToken) : "";
+            const nextEncodingAesKey = nextMode === "ai-bot" ? (encodingAesKey || prevEncodingAesKey) : "";
+            const nextCorpId = nextMode === "app" ? (corpId || prevCorpId) : "";
+            const nextAgentId = nextMode === "app" ? (agentId || prevAgentId) : "";
+            const nextSecret = nextMode === "app" ? (secret || prevSecret) : "";
+            const nextWebhookPath = nextMode === "ai-bot" ? (webhookPath || prevWebhookPath) : "";
+            nextApps.push({
+              id,
+              mode: nextMode,
+              enabled,
+              ...(nextDir ? { directory: nextDir } : {}),
+              ...(nextToken ? { token: nextToken } : {}),
+              ...(nextEncodingAesKey ? { encodingAesKey: nextEncodingAesKey } : {}),
+              ...(nextCorpId ? { corpId: nextCorpId } : {}),
+              ...(nextAgentId ? { agentId: nextAgentId } : {}),
+              ...(nextSecret ? { secret: nextSecret } : {}),
+              ...(nextWebhookPath ? { webhookPath: nextWebhookPath } : {}),
+            });
+          }
+          if (!found) {
+            nextApps.push({
+              id,
+              mode,
+              enabled,
+              ...(directoryInput ? { directory: directoryInput } : {}),
+              ...(mode === "ai-bot" && token ? { token } : {}),
+              ...(mode === "ai-bot" && encodingAesKey ? { encodingAesKey } : {}),
+              ...(mode === "app" && corpId ? { corpId } : {}),
+              ...(mode === "app" && agentId ? { agentId } : {}),
+              ...(mode === "app" && secret ? { secret } : {}),
+              ...(mode === "ai-bot" && webhookPath ? { webhookPath } : {}),
+            });
+          }
+
+          const next: OwpenbotConfigFile = {
+            ...current,
+            channels: {
+              ...current.channels,
+              wecom: {
+                ...(current.channels?.wecom ?? {}),
+                enabled: true,
+                apps: nextApps,
+              },
+            },
+          };
+          next.version = next.version ?? 1;
+          writeConfigFile(config.configPath, next);
+          config.configFile = next;
+
+          const existingIdx = config.wecomApps.findIndex((app) => app.id === id);
+          const existingDirectory = existingIdx >= 0 ? config.wecomApps[existingIdx]?.directory ?? "" : "";
+          const nextDirectory = directoryInput || existingDirectory || undefined;
+          const nextIdentity: WecomIdentity = {
+            id,
+            mode,
+            enabled,
+            ...(nextDirectory ? { directory: String(nextDirectory).trim() } : {}),
+            ...(mode === "ai-bot" && token ? { token } : {}),
+            ...(mode === "ai-bot" && encodingAesKey ? { encodingAesKey } : {}),
+            ...(mode === "app" && corpId ? { corpId } : {}),
+            ...(mode === "app" && agentId ? { agentId } : {}),
+            ...(mode === "app" && secret ? { secret } : {}),
+            ...(mode === "ai-bot" && webhookPath ? { webhookPath } : {}),
+          };
+          if (existingIdx >= 0) {
+            config.wecomApps[existingIdx] = nextIdentity;
+          } else {
+            config.wecomApps.push(nextIdentity);
+          }
+
+          const key = adapterKey("wecom", id);
+          const existing = adapters.get(key);
+          if (!enabled) {
+            if (existing) {
+              try {
+                await existing.stop();
+              } catch (error) {
+                logger.warn({ error, channel: "wecom", identityId: id }, "failed to stop wecom adapter");
+              }
+              adapters.delete(key);
+            }
+            return { id, enabled: false, applied: true };
+          }
+
+          if (existing) {
+            try {
+              await existing.stop();
+            } catch (error) {
+              logger.warn({ error, channel: "wecom", identityId: id }, "failed to stop existing wecom adapter");
+            }
+            adapters.delete(key);
+          }
+
+          const base = createWecomAdapter(nextIdentity, config, logger, handleInbound);
+          const adapter = { ...base, key };
+          adapters.set(key, adapter);
+
+          const startResult = await startAdapterBounded(adapter, {
+            timeoutMs: 2_500,
+            onError: (error) => {
+              logger.error({ error, channel: "wecom", identityId: id }, "wecom adapter start failed");
+              adapters.delete(key);
+            },
+          });
+
+          if (startResult.status === "timeout") {
+            return { id, enabled: true, applied: false, starting: true };
+          }
+          if (startResult.status === "error") {
+            return { id, enabled: true, applied: false, error: String(startResult.error) };
+          }
+          return { id, enabled: true, applied: true };
+        },
+        deleteWecomIdentity: async (rawId: string) => {
+          const id = normalizeIdentityId(rawId);
+          if (id === "env") throw new Error("env identity cannot be deleted");
+
+          const { config: current } = readConfigFile(config.configPath);
+          const wecom = current.channels?.wecom;
+          const apps = Array.isArray(wecom?.apps) ? (wecom.apps as unknown[]) : [];
+          const nextApps: any[] = [];
+          let deleted = false;
+          for (const entry of apps) {
+            if (!entry || typeof entry !== "object") continue;
+            const record = entry as Record<string, unknown>;
+            const entryId = normalizeIdentityId(typeof record.id === "string" ? record.id : "default");
+            if (entryId === id) {
+              deleted = true;
+              continue;
+            }
+            nextApps.push(entry);
+          }
+          const next: OwpenbotConfigFile = {
+            ...current,
+            channels: {
+              ...current.channels,
+              wecom: {
+                ...(current.channels?.wecom ?? {}),
+                apps: nextApps,
+              },
+            },
+          };
+          next.version = next.version ?? 1;
+          writeConfigFile(config.configPath, next);
+          config.configFile = next;
+
+          config.wecomApps.splice(0, config.wecomApps.length, ...config.wecomApps.filter((app) => app.id !== id));
+
+          const key = adapterKey("wecom", id);
+          const existing = adapters.get(key);
+          if (existing) {
+            try {
+              await existing.stop();
+            } catch (error) {
+              logger.warn({ error, channel: "wecom", identityId: id }, "failed to stop wecom adapter");
+            }
+            adapters.delete(key);
+          }
+          return { id, deleted };
+        },
+
         listBindings: async (filters?: { channel?: string; identityId?: string }) => {
           const channelRaw = filters?.channel?.trim().toLowerCase();
           const identityIdRaw = filters?.identityId?.trim();
           let channel: ChannelName | undefined;
           if (channelRaw) {
-            if (channelRaw === "telegram" || channelRaw === "slack") {
+            if (channelRaw === "telegram" || channelRaw === "slack" || channelRaw === "wecom") {
               channel = channelRaw as ChannelName;
             } else {
               throw new Error("Invalid channel");
@@ -804,7 +1048,7 @@ export async function startBridge(config: Config, logger: Logger, reporter?: Bri
         },
         setBinding: async (input: { channel: string; identityId?: string; peerId: string; directory: string }) => {
           const channel = input.channel.trim().toLowerCase();
-          if (channel !== "telegram" && channel !== "slack") {
+          if (channel !== "telegram" && channel !== "slack" && channel !== "wecom") {
             throw new Error("Invalid channel");
           }
           const identityId = normalizeIdentityId(input.identityId);
@@ -820,7 +1064,7 @@ export async function startBridge(config: Config, logger: Logger, reporter?: Bri
         },
         clearBinding: async (input: { channel: string; identityId?: string; peerId: string }) => {
           const channel = input.channel.trim().toLowerCase();
-          if (channel !== "telegram" && channel !== "slack") {
+          if (channel !== "telegram" && channel !== "slack" && channel !== "wecom") {
             throw new Error("Invalid channel");
           }
           const identityId = normalizeIdentityId(input.identityId);
@@ -834,7 +1078,7 @@ export async function startBridge(config: Config, logger: Logger, reporter?: Bri
 
         sendMessage: async (input: { channel: string; identityId?: string; directory: string; text: string }) => {
           const channelRaw = input.channel.trim().toLowerCase();
-          if (channelRaw !== "telegram" && channelRaw !== "slack") {
+          if (channelRaw !== "telegram" && channelRaw !== "slack" && channelRaw !== "wecom") {
             throw new Error("Invalid channel");
           }
           const channel = channelRaw as ChannelName;
@@ -1087,7 +1331,15 @@ export async function startBridge(config: Config, logger: Logger, reporter?: Bri
     });
 
     const binding = store.getBinding(inbound.channel, inbound.identityId, peerKey);
+    logger.info(
+      binding,
+      "resolving getBinding for inbound",
+    );
     const session = store.getSession(inbound.channel, inbound.identityId, peerKey);
+    logger.info(
+      session,
+      "resolving getSession for inbound",
+    );
 
     const identityDirectory = resolveIdentityDirectory(inbound.channel, inbound.identityId);
 

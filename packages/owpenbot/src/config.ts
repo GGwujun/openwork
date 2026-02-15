@@ -10,7 +10,7 @@ const packageDir = path.resolve(moduleDir, "..");
 dotenv.config({ path: path.join(packageDir, ".env") });
 dotenv.config();
 
-export type ChannelName = "telegram" | "slack";
+export type ChannelName = "telegram" | "slack" | "wecom";
 
 export type TelegramIdentity = {
   id: string;
@@ -25,6 +25,21 @@ export type SlackIdentity = {
   id: string;
   botToken: string;
   appToken: string;
+  enabled?: boolean;
+  directory?: string;
+};
+
+export type WecomMode = "ai-bot" | "app";
+
+export type WecomIdentity = {
+  id: string;
+  mode: WecomMode;
+  token?: string;
+  encodingAesKey?: string;
+  corpId?: string;
+  agentId?: string;
+  secret?: string;
+  webhookPath?: string;
   enabled?: boolean;
   directory?: string;
 };
@@ -50,6 +65,21 @@ export type OwpenbotConfigFile = {
       botToken?: string;
       appToken?: string;
     };
+    wecom?: {
+      enabled?: boolean;
+      webhookHost?: string;
+      webhookPort?: number;
+      // New format (multi-app)
+      apps?: WecomIdentity[];
+      // Legacy (single)
+      token?: string;
+      encodingAesKey?: string;
+      mode?: WecomMode;
+      corpId?: string;
+      agentId?: string;
+      secret?: string;
+      webhookPath?: string;
+    };
   };
 };
 
@@ -68,6 +98,9 @@ export type Config = {
   model?: ModelRef;
   telegramBots: TelegramIdentity[];
   slackApps: SlackIdentity[];
+  wecomApps: WecomIdentity[];
+  wecomWebhookHost: string;
+  wecomWebhookPort: number;
   dataDir: string;
   dbPath: string;
   logFile: string;
@@ -205,6 +238,79 @@ function coerceSlackApps(file: OwpenbotConfigFile): SlackIdentity[] {
   return [];
 }
 
+function normalizeWecomMode(value: unknown): WecomMode {
+  const raw = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return raw === "app" ? "app" : "ai-bot";
+}
+
+function coerceWecomApps(file: OwpenbotConfigFile): WecomIdentity[] {
+  const wecom = file.channels?.wecom;
+  const apps = Array.isArray(wecom?.apps) ? (wecom?.apps as unknown[]) : [];
+  const normalized: WecomIdentity[] = [];
+  for (const entry of apps) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const token = typeof record.token === "string" ? record.token.trim() : "";
+    const encodingAesKey = typeof record.encodingAesKey === "string" ? record.encodingAesKey.trim() : "";
+    const id = normalizeId(typeof record.id === "string" ? record.id : "default");
+    const mode = normalizeWecomMode(record.mode);
+    const directory = typeof record.directory === "string" ? record.directory.trim() : "";
+    const webhookPath = typeof record.webhookPath === "string" ? record.webhookPath.trim() : "";
+    const corpId = typeof record.corpId === "string" ? record.corpId.trim() : "";
+    const agentId = typeof record.agentId === "string" ? record.agentId.trim() : "";
+    const secret = typeof record.secret === "string" ? record.secret.trim() : "";
+    if (mode === "ai-bot" && (!token || !encodingAesKey)) continue;
+    if (mode === "app" && (!corpId || !agentId || !secret)) continue;
+    normalized.push({
+      id,
+      mode,
+      enabled: record.enabled === undefined ? true : record.enabled === true,
+      ...(token ? { token } : {}),
+      ...(encodingAesKey ? { encodingAesKey } : {}),
+      ...(directory ? { directory } : {}),
+      ...(mode === "ai-bot" && webhookPath ? { webhookPath } : {}),
+      ...(corpId ? { corpId } : {}),
+      ...(agentId ? { agentId } : {}),
+      ...(secret ? { secret } : {}),
+    });
+  }
+  if (normalized.length) return normalized;
+
+  // Legacy single-app migration (in-memory).
+  const legacyToken = typeof wecom?.token === "string" ? String(wecom.token).trim() : "";
+  const legacyKey = typeof wecom?.encodingAesKey === "string" ? String(wecom.encodingAesKey).trim() : "";
+  const mode = normalizeWecomMode(wecom?.mode);
+  const corpId = typeof wecom?.corpId === "string" ? String(wecom.corpId).trim() : "";
+  const agentId = typeof wecom?.agentId === "string" ? String(wecom.agentId).trim() : "";
+  const secret = typeof wecom?.secret === "string" ? String(wecom.secret).trim() : "";
+  const webhookPath = typeof wecom?.webhookPath === "string" ? String(wecom.webhookPath).trim() : "";
+  if (mode === "ai-bot" && legacyToken && legacyKey) {
+    return [
+      {
+        id: "default",
+        mode,
+        token: legacyToken,
+        encodingAesKey: legacyKey,
+        enabled: true,
+        ...(webhookPath ? { webhookPath } : {}),
+      },
+    ];
+  }
+  if (mode === "app" && corpId && agentId && secret) {
+    return [
+      {
+        id: "default",
+        mode,
+        enabled: true,
+        corpId,
+        agentId,
+        secret,
+      },
+    ];
+  }
+  return [];
+}
+
 export function loadConfig(
   env: EnvLike = process.env,
   options: { requireOpencode?: boolean } = {},
@@ -230,6 +336,7 @@ export function loadConfig(
   // for single-identity setups.
   const telegramBots = coerceTelegramBots(configFile);
   const slackApps = coerceSlackApps(configFile);
+  const wecomApps = coerceWecomApps(configFile);
 
   const envTelegram = env.TELEGRAM_BOT_TOKEN?.trim() ?? "";
   if (envTelegram && !telegramBots.some((bot) => bot.token === envTelegram)) {
@@ -240,11 +347,62 @@ export function loadConfig(
   if (envSlackBot && envSlackApp && !slackApps.some((app) => app.botToken === envSlackBot && app.appToken === envSlackApp)) {
     slackApps.unshift({ id: "env", botToken: envSlackBot, appToken: envSlackApp, enabled: true });
   }
+  const envWecomToken = env.WECOM_TOKEN?.trim() ?? "";
+  const envWecomKey = env.WECOM_ENCODING_AES_KEY?.trim() ?? "";
+  const envWecomMode = normalizeWecomMode(env.WECOM_MODE);
+  const envWecomCorpId = env.WECOM_CORP_ID?.trim() ?? "";
+  const envWecomAgentId = env.WECOM_AGENT_ID?.trim() ?? "";
+  const envWecomSecret = env.WECOM_SECRET?.trim() ?? "";
+  const envWecomWebhookPath = env.WECOM_WEBHOOK_PATH?.trim() ?? "";
+  if (
+    envWecomMode === "ai-bot"
+    && envWecomToken
+    && envWecomKey
+    && !wecomApps.some((app) => app.mode === "ai-bot" && app.token === envWecomToken && app.encodingAesKey === envWecomKey)
+  ) {
+    wecomApps.unshift({
+      id: "env",
+      mode: envWecomMode,
+      token: envWecomToken,
+      encodingAesKey: envWecomKey,
+      enabled: true,
+      ...(envWecomCorpId ? { corpId: envWecomCorpId } : {}),
+      ...(envWecomAgentId ? { agentId: envWecomAgentId } : {}),
+      ...(envWecomSecret ? { secret: envWecomSecret } : {}),
+      ...(envWecomWebhookPath ? { webhookPath: envWecomWebhookPath } : {}),
+    });
+  }
+  if (
+    envWecomMode === "app"
+    && envWecomCorpId
+    && envWecomAgentId
+    && envWecomSecret
+    && !wecomApps.some(
+      (app) => app.mode === "app"
+        && app.corpId === envWecomCorpId
+        && app.agentId === envWecomAgentId
+        && app.secret === envWecomSecret,
+    )
+  ) {
+    wecomApps.unshift({
+      id: "env",
+      mode: envWecomMode,
+      enabled: true,
+      corpId: envWecomCorpId,
+      agentId: envWecomAgentId,
+      secret: envWecomSecret,
+    });
+  }
   const healthPort = parseInteger(env.OWPENBOT_HEALTH_PORT) ?? 3005;
   const model = parseModel(env.OWPENBOT_MODEL);
 
   const telegramEnabledDefault = configFile.channels?.telegram?.enabled ?? true;
   const slackEnabledDefault = configFile.channels?.slack?.enabled ?? true;
+  const wecomEnabledDefault = configFile.channels?.wecom?.enabled ?? true;
+  const wecomWebhookHost =
+    env.WECOM_WEBHOOK_HOST?.trim() || (configFile.channels?.wecom?.webhookHost ?? "").trim() || "127.0.0.1";
+  const wecomWebhookPort =
+    parseInteger(env.WECOM_WEBHOOK_PORT) ?? configFile.channels?.wecom?.webhookPort ?? 3010;
 
   return {
     configPath,
@@ -259,6 +417,12 @@ export function loadConfig(
       ...app,
       enabled: app.enabled !== false && parseBoolean(env.SLACK_ENABLED, slackEnabledDefault),
     })),
+    wecomApps: wecomApps.map((app) => ({
+      ...app,
+      enabled: app.enabled !== false && parseBoolean(env.WECOM_ENABLED, wecomEnabledDefault),
+    })),
+    wecomWebhookHost,
+    wecomWebhookPort,
     dataDir,
     dbPath,
     logFile,

@@ -15,12 +15,15 @@ import {
   type OwpenbotConfigFile,
   type SlackIdentity,
   type TelegramIdentity,
+  type WecomIdentity,
+  type WecomMode,
 } from "./config.js";
 import { BridgeStore } from "./db.js";
 import { createLogger } from "./logger.js";
 import { createClient } from "./opencode.js";
 import { parseSlackPeerId } from "./slack.js";
 import { truncateText } from "./text.js";
+import { createWecomAdapter } from "./wecom.js";
 
 declare const __OWPENBOT_VERSION__: string | undefined;
 
@@ -59,7 +62,7 @@ function createAppLogger(config: ReturnType<typeof loadConfig>) {
 
 function createConsoleReporter(): BridgeReporter {
   const formatChannel = (channel: ChannelName, identityId: string) => {
-    const name = channel === "telegram" ? "Telegram" : "Slack";
+    const name = channel === "telegram" ? "Telegram" : channel === "slack" ? "Slack" : "WeCom";
     return `${name}/${identityId}`;
   };
 
@@ -142,6 +145,45 @@ function upsertSlackApp(cfg: OwpenbotConfigFile, identity: SlackIdentity): Owpen
   return next;
 }
 
+function normalizeWecomMode(value: string | undefined): WecomMode {
+  const raw = (value ?? "").trim().toLowerCase();
+  return raw === "app" ? "app" : "ai-bot";
+}
+
+function upsertWecomApp(cfg: OwpenbotConfigFile, identity: WecomIdentity): OwpenbotConfigFile {
+  const next = { ...cfg };
+  next.channels = next.channels ?? {};
+  const existing = next.channels.wecom ?? {};
+  const apps = Array.isArray(existing.apps) ? existing.apps.slice() : [];
+  const id = normalizeIdentityId(identity.id);
+  const filtered = apps.filter((a) => normalizeIdentityId(a.id) !== id);
+  filtered.push({
+    id,
+    mode: identity.mode,
+    token: identity.token,
+    encodingAesKey: identity.encodingAesKey,
+    enabled: identity.enabled !== false,
+    ...(identity.corpId ? { corpId: identity.corpId } : {}),
+    ...(identity.agentId ? { agentId: identity.agentId } : {}),
+    ...(identity.secret ? { secret: identity.secret } : {}),
+    ...(identity.webhookPath ? { webhookPath: identity.webhookPath } : {}),
+  });
+  next.channels.wecom = { ...existing, enabled: true, apps: filtered };
+  return next;
+}
+
+function deleteWecomApp(cfg: OwpenbotConfigFile, idRaw: string): { next: OwpenbotConfigFile; deleted: boolean } {
+  const id = normalizeIdentityId(idRaw);
+  const next = { ...cfg };
+  next.channels = next.channels ?? {};
+  const existing = next.channels.wecom ?? {};
+  const apps = Array.isArray(existing.apps) ? existing.apps.slice() : [];
+  const filtered = apps.filter((a) => normalizeIdentityId(a.id) !== id);
+  const deleted = filtered.length !== apps.length;
+  next.channels.wecom = { ...existing, apps: filtered };
+  return { next, deleted };
+}
+
 function deleteSlackApp(cfg: OwpenbotConfigFile, idRaw: string): { next: OwpenbotConfigFile; deleted: boolean } {
   const id = normalizeIdentityId(idRaw);
   const next = { ...cfg };
@@ -187,7 +229,7 @@ const program = new Command();
 program
   .name("owpenbot")
   .version(VERSION)
-  .description("Slack + Telegram bridge for a running OpenCode server")
+  .description("Slack + Telegram + WeCom bridge for a running OpenCode server")
   .option("--json", "Output in JSON format", false);
 
 program
@@ -221,6 +263,7 @@ program
           identities: {
             telegram: config.telegramBots.map((b) => ({ id: b.id, enabled: b.enabled !== false })),
             slack: config.slackApps.map((a) => ({ id: a.id, enabled: a.enabled !== false })),
+            wecom: config.wecomApps.map((a) => ({ id: a.id, mode: a.mode, enabled: a.enabled !== false })),
           },
         });
       } else {
@@ -251,12 +294,14 @@ program
     const config = loadConfig(process.env, { requireOpencode: false });
     const telegram = config.telegramBots.map((b) => ({ id: b.id, enabled: b.enabled !== false }));
     const slack = config.slackApps.map((a) => ({ id: a.id, enabled: a.enabled !== false }));
+    const wecom = config.wecomApps.map((a) => ({ id: a.id, mode: a.mode, enabled: a.enabled !== false }));
     if (useJson) {
       outputJson({
         config: config.configPath,
         healthPort: config.healthPort ?? null,
         telegram,
         slack,
+        wecom,
         opencode: { url: config.opencodeUrl, directory: config.opencodeDirectory },
       });
       return;
@@ -265,6 +310,7 @@ program
     console.log(`Health port: ${config.healthPort ?? "(not set)"}`);
     console.log(`Telegram bots: ${telegram.length}`);
     console.log(`Slack apps: ${slack.length}`);
+    console.log(`WeCom apps: ${wecom.length}`);
     console.log(`OpenCode URL: ${config.opencodeUrl}`);
   });
 
@@ -428,6 +474,81 @@ slack
     process.exit(deleted ? 0 : 1);
   });
 
+const wecom = program.command("wecom").description("WeCom identities");
+
+wecom
+  .command("list")
+  .description("List WeCom identities")
+  .action(() => {
+    const useJson = program.opts().json;
+    const config = loadConfig(process.env, { requireOpencode: false });
+    const items = config.wecomApps.map((a) => ({ id: a.id, mode: a.mode, enabled: a.enabled !== false }));
+    if (useJson) outputJson({ items });
+    else for (const item of items) console.log(`${item.id} ${item.mode} ${item.enabled ? "enabled" : "disabled"}`);
+  });
+
+wecom
+  .command("add")
+  .argument("<token>", "WeCom token")
+  .argument("<encodingAesKey>", "WeCom EncodingAESKey (43 chars)")
+  .option("--mode <mode>", "ai-bot|app", "ai-bot")
+  .option("--id <id>", "Identity id (default: default)")
+  .option("--corp-id <corpId>", "Corp ID (app mode)")
+  .option("--agent-id <agentId>", "Agent ID (app mode)")
+  .option("--secret <secret>", "App secret (app mode)")
+  .option("--webhook-path <path>", "Webhook path (default: /wecom/<id>)")
+  .option("--disabled", "Add identity but disable it", false)
+  .description("Add or update a WeCom identity")
+  .action(
+    (
+      token: string,
+      encodingAesKey: string,
+      opts: { id?: string; mode?: string; corpId?: string; agentId?: string; secret?: string; webhookPath?: string; disabled?: boolean },
+    ) => {
+      const useJson = program.opts().json;
+      const config = loadConfig(process.env, { requireOpencode: false });
+      const id = normalizeIdentityId(opts.id);
+      const enabled = !opts.disabled;
+      const mode = normalizeWecomMode(opts.mode);
+      const corpId = opts.corpId?.trim() ?? "";
+      const agentId = opts.agentId?.trim() ?? "";
+      const secret = opts.secret?.trim() ?? "";
+      const webhookPath = opts.webhookPath?.trim() ?? "";
+      if (mode === "app" && (!corpId || !agentId || !secret)) {
+        outputError("corp-id, agent-id, and secret are required for app mode");
+      }
+      updateConfig(config.configPath, (cfg) =>
+        upsertWecomApp(cfg, {
+          id,
+          mode,
+          token: token.trim(),
+          encodingAesKey: encodingAesKey.trim(),
+          enabled,
+          ...(corpId ? { corpId } : {}),
+          ...(agentId ? { agentId } : {}),
+          ...(secret ? { secret } : {}),
+          ...(webhookPath ? { webhookPath } : {}),
+        }),
+      );
+      if (useJson) outputJson({ success: true, id, mode, enabled });
+      else console.log(`Saved WeCom identity: ${id}`);
+    },
+  );
+
+wecom
+  .command("remove")
+  .argument("<id>", "Identity id")
+  .description("Remove a WeCom identity")
+  .action((idRaw: string) => {
+    const useJson = program.opts().json;
+    const config = loadConfig(process.env, { requireOpencode: false });
+    const { next, deleted } = deleteWecomApp(readConfigFile(config.configPath).config, idRaw);
+    writeConfigFile(config.configPath, next);
+    if (useJson) outputJson({ success: deleted, id: normalizeIdentityId(idRaw) });
+    else console.log(deleted ? `Removed WeCom identity: ${normalizeIdentityId(idRaw)}` : "Identity not found.");
+    process.exit(deleted ? 0 : 1);
+  });
+
 // -----------------------------------------------------------------------------
 // Bindings
 // -----------------------------------------------------------------------------
@@ -436,7 +557,7 @@ const bindings = program.command("bindings").description("Manage identity-scoped
 
 bindings
   .command("list")
-  .option("--channel <channel>", "telegram|slack")
+  .option("--channel <channel>", "telegram|slack|wecom")
   .option("--identity <id>", "Identity id")
   .description("List bindings")
   .action((opts: { channel?: string; identity?: string }) => {
@@ -446,7 +567,11 @@ bindings
     const channelRaw = opts.channel?.trim().toLowerCase();
     const identityId = opts.identity?.trim() ? normalizeIdentityId(opts.identity) : undefined;
     const channel: ChannelName | undefined =
-      channelRaw === "telegram" || channelRaw === "slack" ? (channelRaw as ChannelName) : channelRaw ? (outputError("Invalid channel"), undefined) : undefined;
+      channelRaw === "telegram" || channelRaw === "slack" || channelRaw === "wecom"
+        ? (channelRaw as ChannelName)
+        : channelRaw
+          ? (outputError("Invalid channel"), undefined)
+          : undefined;
     const items = store
       .listBindings({ ...(channel ? { channel } : {}), ...(identityId ? { identityId } : {}) })
       .map((b) => ({
@@ -463,7 +588,7 @@ bindings
 
 bindings
   .command("set")
-  .requiredOption("--channel <channel>", "telegram|slack")
+  .requiredOption("--channel <channel>", "telegram|slack|wecom")
   .requiredOption("--identity <id>", "Identity id")
   .requiredOption("--peer <peerId>", "Peer id")
   .requiredOption("--dir <directory>", "Directory")
@@ -473,7 +598,7 @@ bindings
     const config = loadConfig(process.env, { requireOpencode: false });
     const store = new BridgeStore(config.dbPath);
     const channelRaw = opts.channel.trim().toLowerCase();
-    if (channelRaw !== "telegram" && channelRaw !== "slack") outputError("Invalid channel");
+    if (channelRaw !== "telegram" && channelRaw !== "slack" && channelRaw !== "wecom") outputError("Invalid channel");
     const identityId = normalizeIdentityId(opts.identity);
     const peerId = opts.peer.trim();
     const directory = opts.dir.trim();
@@ -487,7 +612,7 @@ bindings
 
 bindings
   .command("clear")
-  .requiredOption("--channel <channel>", "telegram|slack")
+  .requiredOption("--channel <channel>", "telegram|slack|wecom")
   .requiredOption("--identity <id>", "Identity id")
   .requiredOption("--peer <peerId>", "Peer id")
   .description("Clear a binding")
@@ -496,7 +621,7 @@ bindings
     const config = loadConfig(process.env, { requireOpencode: false });
     const store = new BridgeStore(config.dbPath);
     const channelRaw = opts.channel.trim().toLowerCase();
-    if (channelRaw !== "telegram" && channelRaw !== "slack") outputError("Invalid channel");
+    if (channelRaw !== "telegram" && channelRaw !== "slack" && channelRaw !== "wecom") outputError("Invalid channel");
     const identityId = normalizeIdentityId(opts.identity);
     const peerId = opts.peer.trim();
     const ok = store.deleteBinding(channelRaw as ChannelName, identityId, peerId);
@@ -514,15 +639,15 @@ bindings
 program
   .command("send")
   .description("Send a test message")
-  .requiredOption("--channel <channel>", "telegram or slack")
+  .requiredOption("--channel <channel>", "telegram, slack, or wecom")
   .requiredOption("--identity <id>", "Identity id")
   .requiredOption("--to <recipient>", "Recipient ID (chat ID or peerId)")
   .requiredOption("--message <text>", "Message text to send")
   .action(async (opts: { channel: string; identity: string; to: string; message: string }) => {
     const useJson = program.opts().json;
     const channelRaw = opts.channel.trim().toLowerCase();
-    if (channelRaw !== "telegram" && channelRaw !== "slack") {
-      outputError("Invalid channel. Must be 'telegram' or 'slack'.");
+    if (channelRaw !== "telegram" && channelRaw !== "slack" && channelRaw !== "wecom") {
+      outputError("Invalid channel. Must be 'telegram', 'slack', or 'wecom'.");
     }
 
     const config = loadConfig(process.env, { requireOpencode: false });
@@ -536,7 +661,7 @@ program
         if (!bot) throw new Error(`Telegram identity not found: ${identityId}`);
         const tg = new Bot(bot.token);
         await tg.api.sendMessage(Number(to), message);
-      } else {
+      } else if (channelRaw === "slack") {
         const app = config.slackApps.find((a) => a.id === identityId);
         if (!app) throw new Error(`Slack identity not found: ${identityId}`);
         const web = new WebClient(app.botToken);
@@ -547,6 +672,16 @@ program
           text: message,
           ...(peer.threadTs ? { thread_ts: peer.threadTs } : {}),
         } as any);
+      } else {
+        const app = config.wecomApps.find((a) => a.id === identityId);
+        if (!app) throw new Error(`WeCom identity not found: ${identityId}`);
+        if (app.mode !== "app") {
+          throw new Error("WeCom AI Bot does not support CLI send without a live stream.");
+        }
+        const adapter = createWecomAdapter(app, config, createAppLogger(config), async () => {});
+        await adapter.start();
+        await adapter.sendText(to, message);
+        await adapter.stop();
       }
 
       if (useJson) outputJson({ success: true });
