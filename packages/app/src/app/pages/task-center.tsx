@@ -65,6 +65,9 @@ export type TaskCenterViewProps = {
   lastUpdatedAt: number | null;
   syncTasks: (options?: { force?: boolean }) => void;
   startAutomation: (item: TaskCenterItem) => void;
+  // TFS Configuration props
+  tfsConfig?: { serverUrl: string; pat: string; username?: string };
+  setTfsConfig?: (config: { serverUrl: string; pat: string; username?: string }) => void;
   // Task execution props
   selectedItem?: TaskCenterItem | null;
   tasks?: ParsedTask[];

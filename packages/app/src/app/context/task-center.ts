@@ -2,9 +2,18 @@ import { createMemo, createSignal } from "solid-js";
 import { createStore } from "solid-js/store";
 
 import type { Client, TaskCenterItem, TaskCenterStatus, TaskCenterStage, TaskCenterAutomationState } from "../types";
+import type { TFSConfig, FormattedWorkItem } from "../../api/tfs";
+import { TFSClient, DEFAULT_SERVER_URL } from "../../api/tfs";
 import { Persist, persisted } from "../utils/persist";
 import { unwrap } from "../lib/opencode";
 import { parseTasks, updateTaskStatus, type ParsedTask } from "../lib/tasks-parser";
+
+import { 
+  TFS_CONFIG_PATH, 
+  DEFAULT_TFS_CONFIG, 
+  validateTfsConfig, 
+  createTfsConfig 
+} from "../config/tfs";
 
 // Use Record instead of Map for JSON serialization compatibility
 export type AutomationStateMap = Record<number, TaskCenterAutomationState>;
@@ -167,65 +176,28 @@ function extractOutput(result: unknown): string | null {
   return null;
 }
 
-const taskCenterSkillEntrypoint = "tfs2018-integration/tools/task-center-integration.mjs";
-
-function buildTaskCenterSkillCommand(args: string[]): string {
-  const resolver = [
-    "const fs=require('node:fs');",
-    "const path=require('node:path');",
-    "const os=require('node:os');",
-    "const argIndex=process.argv.indexOf('--');",
-    "const args=argIndex>=0?process.argv.slice(argIndex+1):process.argv.slice(1);",
-    `const rel=${JSON.stringify(taskCenterSkillEntrypoint)};`,
-    "const home=os.homedir();",
-    "const configHome=process.env.XDG_CONFIG_HOME || path.join(home, '.config');",
-    "const appData=process.env.APPDATA || process.env.LOCALAPPDATA || '';",
-    "const candidates=[];",
-    "const push=(value)=>{ if(!value) return; if(!candidates.includes(value)) candidates.push(value); };",
-    "push(path.join(process.cwd(), '.opencode', 'skills', rel));",
-    "push(path.join(process.cwd(), '.opencode', 'skill', rel));",
-    "push(path.join(process.cwd(), '.claude', 'skills', rel));",
-    "push(appData?path.join(appData, 'com.differentai.openwork', '.opencode', 'skills', rel):'');",
-    "push(appData?path.join(appData, 'opencode', 'skills', rel):'');",
-    "push(path.join(configHome, 'opencode', 'skills', rel));",
-    "push(path.join(home, '.claude', 'skills', rel));",
-    "const candidate=candidates.find((value)=>fs.existsSync(value));",
-    "if(!candidate){ console.error('Task Center skill not found. Checked:', candidates.join(' | ')); process.exit(1); }",
-    "const { spawnSync } = require('node:child_process');",
-    "const result=spawnSync(process.execPath, [candidate, ...args], { stdio: 'inherit' });",
-    "process.exit(result.status ?? 1);",
-  ].join(" ");
-  const resolverArg = JSON.stringify(resolver);
-  const argList = args.map((arg) => JSON.stringify(arg)).join(" ");
-  return `node -e ${resolverArg} -- ${argList}`;
-}
-
-function parseWorkItems(raw: string): TaskCenterItem[] {
-  const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
-  return parsed
-    .filter((item) => typeof item?.id === "number")
-    .map((item) => {
-      const state = typeof item.state === "string" ? item.state : null;
-      const changedDate = typeof item.changedDate === "string" ? item.changedDate : null;
-      const updatedAt = changedDate ? Date.parse(changedDate) : null;
-      const tfsId = item.id as number;
-      return {
-        id: `tfs-${tfsId}`,
-        tfsId,
-        title: typeof item.title === "string" ? item.title : "Untitled",
-        description: typeof item.description === "string" ? item.description : undefined,
-        project: typeof item.project === "string" ? item.project : null,
-        workItemType: typeof item.workItemType === "string" ? item.workItemType : null,
-        priority: typeof item.priority === "number" ? item.priority : null,
-        assignedTo: typeof item.assignedTo === "string" ? item.assignedTo : null,
-        tags: Array.isArray(item.tags) ? (item.tags as string[]) : [],
-        state,
-        url: typeof item.url === "string" ? item.url : null,
-        status: mapStateToStatus(state),
-        stage: "syncing",
-        updatedAt: Number.isFinite(updatedAt) ? updatedAt : null,
-      } satisfies TaskCenterItem;
-    });
+/**
+ * 将格式化的工作项转换为 TaskCenterItem
+ */
+function formatToTaskCenterItem(item: FormattedWorkItem): TaskCenterItem {
+  const changedDate = item.changedDate;
+  const updatedAt = changedDate ? Date.parse(changedDate) : null;
+  return {
+    id: `tfs-${item.id}`,
+    tfsId: item.id,
+    title: item.title,
+    description: item.description,
+    project: item.project,
+    workItemType: item.workItemType,
+    priority: item.priority,
+    assignedTo: item.assignedTo,
+    tags: item.tags,
+    state: item.state,
+    url: item.url,
+    status: mapStateToStatus(item.state),
+    stage: "idle",
+    updatedAt: Number.isFinite(updatedAt) ? updatedAt : null,
+  };
 }
 
 export function createTaskCenterStore(options: {
@@ -233,6 +205,8 @@ export function createTaskCenterStore(options: {
   activeWorkspaceRoot: () => string;
   createSessionAndOpen: () => void;
   setPrompt: (value: string) => void;
+  tfsConfig?: () => TFSConfig | null;
+  createSessionAndOpenWithDirectory?: (directory: string) => void;
 }) {
   const [items, setItems] = createSignal<TaskCenterItem[]>([]);
   const [status, setStatus] = createSignal<SyncStatus>("idle");
@@ -259,6 +233,142 @@ export function createTaskCenterStore(options: {
     const updater: Partial<AutomationStateMap> = {};
     updater[tfsId] = state;
     automationStore[1](updater);
+  };
+
+  // TFS Configuration store - persists TFS PAT and server URL
+  const tfsConfigStore = (() => {
+    const initialConfig: TFSConfig = DEFAULT_TFS_CONFIG;
+    const store = createStore<TFSConfig>(initialConfig);
+    return persisted(Persist.global("task-center.tfs-config"), store);
+  })();
+  const [tfsConfigState, setTfsConfigState] = tfsConfigStore;
+
+  // Config loaded from file cache
+  const [fileConfig, setFileConfig] = createSignal<TFSConfig | null>(null);
+  const [configLoaded, setConfigLoaded] = createSignal(false);
+
+  /**
+   * Load TFS config from file (async)
+   * Tries to read from .opencode/config/tfs.json
+   */
+  const loadTfsConfigFromFile = async (): Promise<TFSConfig | null> => {
+    // Only try to load from file in Tauri desktop environment
+    if (typeof window === 'undefined' || !(window as { __TAURI__?: unknown }).__TAURI__) {
+      console.log('Not in Tauri environment, skipping file config');
+      setConfigLoaded(true);
+      return null;
+    }
+
+    try {
+      // Dynamic import to avoid browser issues
+      const fs = await import('@tauri-apps/plugin-fs');
+      console.log('Loading TFS config from:', TFS_CONFIG_PATH);
+      console.log('BaseDirectory values:', Object.keys(fs.BaseDirectory).join(', '));
+      
+      // Read from home directory (cross-platform)
+      const content = await fs.readTextFile(TFS_CONFIG_PATH, { baseDir: fs.BaseDirectory.Home });
+      console.log('TFS config file loaded, size:', content.length);
+      
+      const parsed = JSON.parse(content) as Partial<TFSConfig>;
+      
+      if (validateTfsConfig(parsed)) {
+        const config = createTfsConfig(parsed);
+        setFileConfig(config);
+        // Also update persisted store
+        setTfsConfigState(config);
+        setConfigLoaded(true);
+        console.log('TFS config loaded successfully');
+        return config;
+      } else {
+        console.warn('TFS config file invalid (missing PAT)');
+      }
+    } catch (error) {
+      // File doesn't exist or invalid - that's okay
+      console.log('TFS config file not found or invalid:', error);
+    }
+    
+    setConfigLoaded(true);
+    return null;
+  };
+
+  /**
+   * Save TFS config to file (async)
+   */
+  const saveTfsConfigToFile = async (config: TFSConfig): Promise<void> => {
+    if (typeof window === 'undefined' || !(window as { __TAURI__?: unknown }).__TAURI__) {
+      throw new Error('File operations only available in Tauri desktop app');
+    }
+
+    const fs = await import('@tauri-apps/plugin-fs');
+    
+    // Ensure directory exists
+    try {
+      await fs.mkdir('.opencode/config', { baseDir: fs.BaseDirectory.Home, recursive: true });
+    } catch {
+      // Directory might already exist
+    }
+    
+    const content = JSON.stringify({
+      serverUrl: config.serverUrl || DEFAULT_SERVER_URL,
+      pat: config.pat,
+      username: config.username,
+    }, null, 2);
+    
+    await fs.writeTextFile(TFS_CONFIG_PATH, content, { baseDir: fs.BaseDirectory.Home });
+    setFileConfig(config);
+    console.log('TFS config saved to:', TFS_CONFIG_PATH);
+  };
+
+  // Hard-coded config for immediate use (will be overridden by file config when available)
+  const HARDCODED_CONFIG: TFSConfig = {
+    serverUrl: 'http://tfs2018-web.winning.com.cn:8080/tfs/WINNING-6.0',
+    pat: 'yxnmy2hwkv4l2ulz7p7zt4b43fotxmsedamak4vfeattcehd5elq',
+    username: 'WINNING\\g_wj'
+  };
+
+  /**
+   * Get valid TFS configuration from store, file, or options
+   * Priority: options > file > persisted storage > hardcoded
+   */
+  const getTfsConfig = (): TFSConfig | null => {
+    // First try from options prop (highest priority)
+    if (options.tfsConfig) {
+      const config = options.tfsConfig();
+      if (config && config.pat) return config;
+    }
+
+    // Then try from file cache
+    const fromFile = fileConfig();
+    if (fromFile && fromFile.pat) {
+      return fromFile;
+    }
+
+    // Then try from persisted store (tfsConfigState is a Store, not a function)
+    const stored = tfsConfigState;
+    if (stored && stored.pat) {
+      return {
+        serverUrl: stored.serverUrl,
+        pat: stored.pat,
+        username: stored.username
+      };
+    }
+
+    // Finally use hardcoded config as fallback
+    return HARDCODED_CONFIG;
+  };
+
+  /**
+   * Set TFS configuration (sync to store, async to file)
+   */
+  const setTfsConfig = (config: TFSConfig) => {
+    setTfsConfigState(config);
+    setFileConfig(config);
+    // Also try to save to file (async, don't wait)
+    if (typeof window !== 'undefined' && (window as { __TAURI__?: unknown }).__TAURI__) {
+      saveTfsConfigToFile(config).catch(e => {
+        console.warn('Failed to save TFS config to file:', e);
+      });
+    }
   };
 
   const uiStore = (() => {
@@ -299,74 +409,39 @@ export function createTaskCenterStore(options: {
 
   const syncTasks = async (syncOptions?: { force?: boolean }) => {
     if (syncing() && !syncOptions?.force) return;
-    const activeClient = options.client();
-    if (!activeClient) {
-      setError("Not connected to OpenCode.");
+
+    // Try to load config from file if not already loaded
+    if (!configLoaded()) {
+      await loadTfsConfigFromFile();
+    }
+
+    // Get TFS configuration
+    const config = getTfsConfig();
+    if (!config) {
+      setError(`TFS configuration not found. Please create ${TFS_CONFIG_PATH} with your PAT:\n\n{\n  "serverUrl": "http://tfs2018-web.winning.com.cn:8080/tfs/WINNING-6.0",\n  "pat": "your-pat-token",\n  "username": "WINNING\\\\your-username"\n}`);
       setStatus("error");
       return;
     }
 
-    const directory = options.activeWorkspaceRoot().trim();
-    const command = buildTaskCenterSkillCommand(["list-json"]);
-
     setSyncing(true);
     setStatus("syncing");
     setError(null);
+    setSyncSessionId(null);
 
     try {
-      const sessionApi = activeClient.session as typeof activeClient.session & {
-        shellAsync?: (input: {
-          sessionID: string;
-          command: string;
-          agent?: string;
-          directory?: string;
-        }) => Promise<unknown>;
-        shell?: (input: {
-          sessionID: string;
-          command: string;
-          agent?: string;
-          directory?: string;
-        }) => Promise<unknown>;
-      };
+      // Create TFS client and fetch work items directly
+      const client = new TFSClient(config);
+      const workItems = await client.getMyWorkItems({
+        states: ['已分析'],
+        top: 100
+      });
 
-      let sessionID = syncSessionId();
-      if (!sessionID) {
-        const result = await sessionApi.create({ directory: directory || undefined });
-        const session = unwrap(result);
-        sessionID = session.id;
-        setSyncSessionId(sessionID);
-      }
-
-      const shellInput = {
-        sessionID,
-        command,
-        agent: "openwork",
-        directory: directory || undefined,
-      };
-      const result = sessionApi.shellAsync
-        ? await sessionApi.shellAsync(shellInput)
-        : sessionApi.shell
-          ? await sessionApi.shell(shellInput)
-          : null;
-
-      if (!result) {
-        throw new Error("Shell execution is unavailable for task sync.");
-      }
-
-      const output = extractOutput(result);
-      const trimmed = output?.trim();
-      if (!trimmed) {
-        throw new Error("Task sync returned no output.");
-      }
-      if (!trimmed.startsWith("[") && !trimmed.startsWith("{")) {
-        throw new Error(trimmed);
-      }
-
-      const tfsItems = parseWorkItems(trimmed).map((item) => ({
+      // Convert to TaskCenterItem format
+      const tfsItems = workItems.map(formatToTaskCenterItem).map((item) => ({
         ...item,
         stage: "idle" as TaskCenterStage,
       }));
-      
+
       // Merge with automation state to preserve items not in TFS query
       const mergedItems = mergeTfsItemsWithAutomation(tfsItems, automationState ?? {});
       setItems(mergedItems);
@@ -382,60 +457,19 @@ export function createTaskCenterStore(options: {
   };
 
   const startAutomation = async (item: TaskCenterItem) => {
-    const activeClient = options.client();
-    if (!activeClient) {
-      setError("Not connected to OpenCode.");
+    const tfsId = item.tfsId;
+
+    // Get TFS configuration
+    const config = getTfsConfig();
+    if (!config) {
+      setError("TFS configuration not found. Please configure TFS PAT in settings.");
       return;
     }
 
-    const directory = options.activeWorkspaceRoot().trim();
-    const tfsId = item.tfsId;
-
     try {
-      // Step 1: Update TFS state to "活动" via shell command
-      const activateCommand = buildTaskCenterSkillCommand(["activate", String(tfsId)]);
-      
-      const sessionApi = activeClient.session as typeof activeClient.session & {
-        shellAsync?: (input: {
-          sessionID: string;
-          command: string;
-          agent?: string;
-          directory?: string;
-        }) => Promise<unknown>;
-        shell?: (input: {
-          sessionID: string;
-          command: string;
-          agent?: string;
-          directory?: string;
-        }) => Promise<unknown>;
-      };
-
-      // Create a temporary session for TFS operations
-      const result = await sessionApi.create({ directory: directory || undefined });
-      const session = unwrap(result);
-      const sessionID = session.id;
-
-      const shellInput = {
-        sessionID,
-        command: activateCommand,
-        agent: "openwork",
-        directory: directory || undefined,
-      };
-
-      const shellResult = sessionApi.shellAsync
-        ? await sessionApi.shellAsync(shellInput)
-        : sessionApi.shell
-          ? await sessionApi.shell(shellInput)
-          : null;
-
-      if (!shellResult) {
-        throw new Error("Shell execution is unavailable for TFS state update.");
-      }
-
-      const output = extractOutput(shellResult);
-      if (!output?.includes("activated successfully")) {
-        console.warn("TFS activation may have failed:", output);
-      }
+      // Step 1: Activate work item via TFS API
+      const client = new TFSClient(config);
+      await client.activateWorkItem(tfsId);
 
       // Step 2: Update local automation state
       setAutomationState(tfsId, {
@@ -751,6 +785,12 @@ EOF`,
     syncSessionId,
     automationState,
     setAutomationState,
+    // TFS Configuration
+    tfsConfig: tfsConfigState,
+    setTfsConfig,
+    loadTfsConfigFromFile,
+    saveTfsConfigToFile,
+    TFS_CONFIG_PATH,
     // Task execution
     selectedItem,
     selectItem,
