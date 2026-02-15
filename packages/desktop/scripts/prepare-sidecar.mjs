@@ -87,7 +87,6 @@ const owpenbotVersion = (() => {
   }
   return null;
 })();
-
 // Target triple for native platform binaries
 const resolvedTargetTriple = (() => {
   const envTarget =
@@ -285,6 +284,23 @@ let didBuildOpenworkServer = false;
 const shouldBuildOpenworkServer =
   forceBuild || !existsSync(openworkServerBuildPath) || isStubBinary(openworkServerBuildPath);
 
+// Try to find bun in PATH
+const findBun = () => {
+  try {
+    // Try 'where bun' on Windows
+    const result = spawnSync("where", ["bun"], { encoding: "utf8", shell: true });
+    if (result.status === 0 && result.stdout) {
+      const paths = result.stdout.trim().split(/\r?\n/);
+      // Prefer .exe over .cmd
+      const exePath = paths.find(p => p.endsWith('.exe')) || paths[0];
+      return exePath?.trim();
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+};
+
 if (shouldBuildOpenworkServer) {
   mkdirSync(sidecarDir, { recursive: true });
   if (existsSync(openworkServerBuildPath)) {
@@ -299,16 +315,22 @@ if (shouldBuildOpenworkServer) {
     console.error(`OpenWork server build script not found at ${openworkServerScript}`);
     process.exit(1);
   }
+
+  const bunPath = findBun() || "bun";
+  console.log(`Using bun at: ${bunPath}`);
+
   const openworkServerArgs = [openworkServerScript, "--outdir", sidecarDir, "--filename", "openwork-server"];
   if (bunTarget) {
     openworkServerArgs.push("--target", bunTarget);
   }
-  const buildResult = spawnSync("bun", openworkServerArgs, {
+  const buildResult = spawnSync(bunPath, openworkServerArgs, {
     cwd: openworkServerDir,
     stdio: "inherit",
+    shell: true,
   });
 
   if (buildResult.status !== 0) {
+    console.error("Failed to build openwork-server:", buildResult);
     process.exit(buildResult.status ?? 1);
   }
 
@@ -326,6 +348,7 @@ if (existsSync(openworkServerBuildPath)) {
       // ignore
     }
     copyFileSync(openworkServerBuildPath, openworkServerPath);
+    console.log(`[openwork-server] Copied -> ${openworkServerPath}`);
   }
 
   if (openworkServerTargetPath) {
@@ -340,6 +363,7 @@ if (existsSync(openworkServerBuildPath)) {
         // ignore
       }
       copyFileSync(openworkServerBuildPath, openworkServerTargetPath);
+      console.log(`[openwork-server] Copied -> ${openworkServerTargetPath}`);
     }
   }
 }
@@ -427,6 +451,7 @@ if (shouldDownloadOpencode) {
     });
 
     if (result.status !== 0) {
+      console.error("Failed to download OpenCode:", result);
       process.exit(result.status ?? 1);
     }
   } else {
@@ -434,6 +459,7 @@ if (shouldDownloadOpencode) {
       stdio: "inherit",
     });
     if (downloadResult.status !== 0) {
+      console.error("Failed to download OpenCode:", downloadResult);
       process.exit(downloadResult.status ?? 1);
     }
 
@@ -444,6 +470,7 @@ if (shouldDownloadOpencode) {
         stdio: "inherit",
       });
       if (unzipResult.status !== 0) {
+        console.error("Failed to unzip OpenCode:", unzipResult);
         process.exit(unzipResult.status ?? 1);
       }
     } else if (opencodeAsset.endsWith(".tar.gz")) {
@@ -451,6 +478,7 @@ if (shouldDownloadOpencode) {
         stdio: "inherit",
       });
       if (tarResult.status !== 0) {
+        console.error("Failed to extract OpenCode tarball:", tarResult);
         process.exit(tarResult.status ?? 1);
       }
     } else {
@@ -475,6 +503,7 @@ if (shouldDownloadOpencode) {
       // ignore
     }
     copyFileSync(extractedBinary, target);
+    console.log(`[opencode] Copied -> ${target}`);
     try {
       chmodSync(target, 0o755);
     } catch {
@@ -519,12 +548,15 @@ if (shouldBuildOwpenbot) {
     console.error(`Owpenbot build script not found at ${owpenbotScript}`);
     process.exit(1);
   }
+  const bunPath = findBun() || "bun";
   const owpenbotArgs = [owpenbotScript, "--outdir", sidecarDir, "--filename", "owpenbot"];
   if (bunTarget) {
     owpenbotArgs.push("--target", bunTarget);
   }
-  const result = spawnSync("bun", owpenbotArgs, { cwd: owpenbotDir, stdio: "inherit" });
+  const result = spawnSync(bunPath, owpenbotArgs, { cwd: owpenbotDir, stdio: "inherit", shell: true });
+  
   if (result.status !== 0) {
+    console.error("Failed to build owpenbot:", result);
     process.exit(result.status ?? 1);
   }
 
@@ -540,6 +572,7 @@ if (existsSync(owpenbotBuildPath)) {
       // ignore
     }
     copyFileSync(owpenbotBuildPath, owpenbotPath);
+    console.log(`[owpenbot] Copied -> ${owpenbotPath}`);
   }
 
   if (owpenbotTargetPath) {
@@ -551,6 +584,7 @@ if (existsSync(owpenbotBuildPath)) {
         // ignore
       }
       copyFileSync(owpenbotBuildPath, owpenbotTargetPath);
+      console.log(`[owpenbot] Copied -> ${owpenbotTargetPath}`);
     }
   }
 }
@@ -572,6 +606,7 @@ if (shouldBuildOpenwrk) {
     console.error(`Openwrk build script not found at ${openwrkBuildScript}`);
     process.exit(1);
   }
+  const bunPath = findBun() || "bun";
   const openwrkArgs = [
     openwrkBuildScript,
     "--outdir",
@@ -582,9 +617,10 @@ if (shouldBuildOpenwrk) {
   if (bunTarget) {
     openwrkArgs.push("--target", bunTarget);
   }
-  const result = spawnSync("bun", openwrkArgs, {
+  const result = spawnSync(bunPath, openwrkArgs, {
     cwd: openwrkDir,
     stdio: "inherit",
+    shell: true,
     env: {
       ...process.env,
       NODE_ENV: "production",
@@ -592,6 +628,7 @@ if (shouldBuildOpenwrk) {
     },
   });
   if (result.status !== 0) {
+    console.error("Failed to build openwrk:", result);
     process.exit(result.status ?? 1);
   }
 
@@ -607,6 +644,7 @@ if (existsSync(openwrkBuildPath)) {
       // ignore
     }
     copyFileSync(openwrkBuildPath, openwrkPath);
+    console.log(`[openwrk] Copied -> ${openwrkPath}`);
   }
 
   if (openwrkTargetPath) {
@@ -618,6 +656,7 @@ if (existsSync(openwrkBuildPath)) {
         // ignore
       }
       copyFileSync(openwrkBuildPath, openwrkTargetPath);
+      console.log(`[openwrk] Copied -> ${openwrkTargetPath}`);
     }
   }
 
@@ -684,10 +723,12 @@ try {
   mkdirSync(sidecarDir, { recursive: true });
   const content = JSON.stringify(versions, null, 2) + "\n";
   writeFileSync(versionsPath, content, "utf8");
+  console.log(`[metadata] Generated -> ${versionsPath}`);
   if (resolvedTargetTriple) {
     const targetSuffix = process.platform === "win32" ? ".exe" : "";
     const targetVersionsPath = join(sidecarDir, `versions.json-${resolvedTargetTriple}${targetSuffix}`);
     writeFileSync(targetVersionsPath, content, "utf8");
+    console.log(`[metadata] Generated -> ${targetVersionsPath}`);
   }
 } catch (error) {
   console.error(`Failed to write versions.json: ${error}`);

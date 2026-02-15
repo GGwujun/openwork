@@ -96,6 +96,9 @@ function defaultTarget(): string {
 async function buildOnce(entrypoint: string, outdir: string, filename: string, target?: string) {
   mkdirSync(outdir, { recursive: true });
   const outfile = join(outdir, outputName(filename, target));
+  
+  console.log(`[openwrk] Building for target: ${target ?? "default"}...`);
+
   const define: Record<string, string> = {};
   const pkgPath = resolve("package.json");
   try {
@@ -108,6 +111,8 @@ async function buildOnce(entrypoint: string, outdir: string, filename: string, t
   }
 
   const resolvedTarget = target ?? defaultTarget();
+  console.log(`[openwrk] Compiling ${entrypoint} -> ${outfile}`);
+  
   const result = await bun.build({
     tsconfig: "./tsconfig.json",
     plugins: [solidPlugin],
@@ -118,12 +123,15 @@ async function buildOnce(entrypoint: string, outdir: string, filename: string, t
       outfile,
     },
   });
+  
   if (!result.success) {
     for (const log of result.logs) {
       console.error(log);
     }
     process.exit(1);
   }
+  
+  console.log(`[openwrk] Build complete: ${outfile}`);
 }
 
 const options = readArgs(bun.argv.slice(2));
