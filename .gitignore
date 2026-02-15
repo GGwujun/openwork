@@ -40,3 +40,12 @@ vendor/opencode/
 
 # OpenWork workspace-local artifacts
 .opencode/openwork/
+
+# TFS Configuration (contains sensitive PAT)
+.opencode/config/tfs.json
+
+# Tauri dev config (local-specific)
+packages/desktop/tauri.dev.config.json
+
+# Forge archives
+forge/archives/
