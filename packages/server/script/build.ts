@@ -8,7 +8,6 @@ const bunRuntime = (globalThis as typeof globalThis & {
     argv?: string[];
   };
 }).Bun;
-
 if (!bunRuntime?.build || !bunRuntime.argv) {
   console.error("This script must be run with Bun.");
   process.exit(1);
