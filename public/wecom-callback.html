@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>企业微信登录 - OpenWork</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: rgba(30, 41, 59, 0.5);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+            border: 1px solid rgba(148, 163, 184, 0.1);
+        }
+        
+        .logo {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 24px;
+        }
+        
+        h1 {
+            color: #f8fafc;
+            font-size: 24px;
+            margin-bottom: 16px;
+        }
+        
+        .status-icon {
+            width: 48px;
+            height: 48px;
+            margin: 24px auto;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+        
+        .status-icon.success {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        
+        .status-icon.error {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        
+        .message {
+            color: #94a3b8;
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+        
+        .code-box {
+            background: rgba(15, 23, 42, 0.8);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 8px;
+            padding: 16px;
+            margin: 20px 0;
+            position: relative;
+        }
+        
+        .code-label {
+            color: #64748b;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        
+        .code-value {
+            color: #22c55e;
+            font-family: "Courier New", monospace;
+            font-size: 14px;
+            word-break: break-all;
+            user-select: all;
+            cursor: pointer;
+        }
+        
+        .copy-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: rgba(59, 130, 246, 0.2);
+            border: none;
+            color: #3b82f6;
+            padding: 6px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+        
+        .copy-btn:hover {
+            background: rgba(59, 130, 246, 0.3);
+        }
+        
+        .copy-btn.copied {
+            background: rgba(34, 197, 94, 0.2);
+            color: #22c55e;
+        }
+        
+        .instructions {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 8px;
+            padding: 16px;
+            margin-top: 24px;
+            text-align: left;
+        }
+        
+        .instructions h3 {
+            color: #60a5fa;
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+        
+        .instructions ol {
+            color: #94a3b8;
+            font-size: 13px;
+            padding-left: 20px;
+            line-height: 1.8;
+        }
+        
+        .instructions li {
+            margin-bottom: 4px;
+        }
+        
+        .close-hint {
+            color: #64748b;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Logo -->
+        <svg class="logo" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect width="100" height="100" rx="20" fill="#3b82f6"/>
+            <path d="M30 35h40M30 50h40M30 65h25" stroke="white" stroke-width="6" stroke-linecap="round"/>
+        </svg>
+        
+        <h1>企业微信登录</h1>
+        
+        <div id="content">
+            <!-- Content will be inserted by JavaScript -->
+        </div>
+    </div>
+
+    <script>
+        // Parse URL parameters
+        const params = new URLSearchParams(window.location.search);
+        const code = params.get('code');
+        const state = params.get('state');
+        const error = params.get('error');
+        
+        const content = document.getElementById('content');
+        
+        if (error) {
+            // Error state
+            content.innerHTML = `
+                <div class="status-icon error">✕</div>
+                <p class="message">登录失败：${error}</p>
+                <p class="close-hint">请关闭此窗口，返回 OpenWork 应用重试。</p>
+            `;
+        } else if (code) {
+            // Success state
+            content.innerHTML = `
+                <div class="status-icon success">✓</div>
+                <p class="message">授权成功！请复制下方的授权码，粘贴到 OpenWork 应用中完成登录。</p>
+                
+                <div class="code-box">
+                    <div class="code-label">授权码 (Authorization Code)</div>
+                    <div class="code-value" id="auth-code">${code}</div>
+                    <button class="copy-btn" id="copy-btn" onclick="copyCode()">复制</button>
+                </div>
+                
+                <div class="instructions">
+                    <h3>下一步操作：</h3>
+                    <ol>
+                        <li>点击上方的"复制"按钮复制授权码</li>
+                        <li>返回 OpenWork 桌面应用</li>
+                        <li>在登录页面粘贴授权码</li>
+                        <li>点击"确认登录"完成认证</li>
+                    </ol>
+                </div>
+                
+                <p class="close-hint">复制完成后，您可以关闭此窗口。</p>
+            `;
+            
+            // Auto-select code on click
+            document.getElementById('auth-code').addEventListener('click', function() {
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(this);
+                selection.removeAllRanges();
+                selection.addRange(range);
+            });
+        } else {
+            // Missing parameters
+            content.innerHTML = `
+                <div class="status-icon error">!</div>
+                <p class="message">无效的回调链接。<br>缺少必要的授权参数。</p>
+                <p class="close-hint">请关闭此窗口，重新尝试登录。</p>
+            `;
+        }
+        
+        function copyCode() {
+            const code = document.getElementById('auth-code').textContent;
+            const btn = document.getElementById('copy-btn');
+            
+            navigator.clipboard.writeText(code).then(() => {
+                btn.textContent = '已复制!';
+                btn.classList.add('copied');
+                
+                setTimeout(() => {
+                    btn.textContent = '复制';
+                    btn.classList.remove('copied');
+                }, 2000);
+            }).catch(() => {
+                // Fallback: select text
+                const codeElement = document.getElementById('auth-code');
+                const selection = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(codeElement);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                
+                btn.textContent = '已选中';
+                setTimeout(() => {
+                    btn.textContent = '复制';
+                }, 2000);
+            });
+        }
+    </script>
+</body>
+</html>
