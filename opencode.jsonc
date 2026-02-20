@@ -9,7 +9,10 @@
       "type": "local"
     }
   },
-  "model": "openai/gpt-5.2-codex",
+  "model": "winning-km/K2.5",
+  "instructions": [
+    ".opencode/soul.md"
+  ],
   "plugin": [
     "opencode-scheduler"
   ]
