@@ -857,3 +857,13 @@ export async function fsReadDir(path: string, workspaceRoot: string): Promise<Fi
 export async function fsReadFile(path: string, workspaceRoot: string): Promise<FileReadResult> {
   return invoke<FileReadResult>("fs_read_file", { path, workspaceRoot });
 }
+
+/**
+ * Write file content
+ * @param path File path to write (absolute or workspace-relative)
+ * @param content File content to write
+ * @param workspaceRoot Workspace root for path validation
+ */
+export async function fsWriteFile(path: string, content: string, workspaceRoot: string): Promise<void> {
+  return invoke<void>("fs_write_file", { path, content, workspaceRoot });
+}
