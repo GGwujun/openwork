@@ -1,0 +1,188 @@
+{
+  "repositories": [
+    {
+      "id": "outpatient-web",
+      "name": "门诊前端",
+      "path": "/repos/winning-outpatient-web",
+      "description": "Winning门诊系统前端React项目",
+      "keywords": [
+        "门诊",
+        "挂号",
+        "门诊医生",
+        "门诊收费",
+        "clinic",
+        "outpatient",
+        "门诊系统"
+      ],
+      "techStack": [
+        "frontend",
+        "react",
+        "typescript"
+      ],
+      "weight": 1
+    },
+    {
+      "id": "outpatient-api",
+      "name": "门诊后端API",
+      "path": "/repos/winning-outpatient-api",
+      "description": "Winning门诊系统后端服务",
+      "keywords": [
+        "门诊",
+        "挂号",
+        "门诊医生",
+        "门诊收费",
+        "api",
+        "接口",
+        "clinic",
+        "outpatient"
+      ],
+      "techStack": [
+        "backend",
+        "java",
+        "spring"
+      ],
+      "weight": 1
+    },
+    {
+      "id": "inpatient-web",
+      "name": "住院前端",
+      "path": "/repos/winning-inpatient-web",
+      "description": "Winning住院系统前端",
+      "keywords": [
+        "住院",
+        "住院医生",
+        "护士",
+        "床位",
+        "inpatient",
+        "admission",
+        "bed",
+        "ward"
+      ],
+      "techStack": [
+        "frontend",
+        "react",
+        "typescript"
+      ],
+      "weight": 1
+    },
+    {
+      "id": "inpatient-api",
+      "name": "住院后端API",
+      "path": "/repos/winning-inpatient-api",
+      "description": "Winning住院系统后端服务",
+      "keywords": [
+        "住院",
+        "住院医生",
+        "护士",
+        "床位",
+        "inpatient",
+        "admission",
+        "bed",
+        "ward"
+      ],
+      "techStack": [
+        "backend",
+        "java",
+        "spring"
+      ],
+      "weight": 1
+    },
+    {
+      "id": "billing-api",
+      "name": "收费计费API",
+      "path": "/repos/winning-billing-api",
+      "description": "费用计算和收费服务",
+      "keywords": [
+        "收费",
+        "计费",
+        "费用",
+        "billing",
+        "payment",
+        "收费处",
+        "price",
+        "支付",
+        "结算"
+      ],
+      "techStack": [
+        "backend",
+        "java"
+      ],
+      "weight": 1.2
+    },
+    {
+      "id": "reporting-service",
+      "name": "报表服务",
+      "path": "/repos/winning-reporting-service",
+      "description": "统计报表和查询服务",
+      "keywords": [
+        "报表",
+        "统计",
+        "查询",
+        "report",
+        "statistics",
+        "dashboard",
+        "excel",
+        "pdf"
+      ],
+      "techStack": [
+        "backend",
+        "reporting",
+        "sql"
+      ],
+      "weight": 0.8
+    },
+    {
+      "id": "common-components",
+      "name": "公共组件库",
+      "path": "/repos/winning-common-components",
+      "description": "前端公共组件和工具类",
+      "keywords": [
+        "组件",
+        "公共",
+        "工具",
+        "utils",
+        "component",
+        "shared"
+      ],
+      "techStack": [
+        "frontend",
+        "typescript",
+        "react"
+      ],
+      "weight": 0.6
+    },
+    {
+      "id": "spark-ui",
+      "name": "Spark UI前端框架",
+      "path": "http://tfs2018-web.winning.com.cn:8080/tfs/WINNING-6.0/FEX/_git/spark",
+      "description": "Spark前端开发框架 - Vue2/Vue3双版本支持",
+      "keywords": [
+        "spark",
+        "vue",
+        "vue2",
+        "vue3",
+        "前端框架",
+        "ui框架",
+        "组件库",
+        "前端",
+        "页面"
+      ],
+      "techStack": [
+        "frontend",
+        "vue",
+        "typescript"
+      ],
+      "weight": 1.2,
+      "branches": {
+        "vue2": "1.2.2",
+        "vue3": "next"
+      }
+    }
+  ],
+  "rules": {
+    "keywordScore": 2,
+    "techStackScore": 1,
+    "primaryThreshold": 3,
+    "secondaryThreshold": 1.5
+  }
+}
