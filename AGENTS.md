@@ -148,6 +148,87 @@ Key primitives to expose:
 * `permission.Service` — Permission prompts
 * `tools.BaseTool` — Step-level actions
 
+### Best Practice: Calling AI via promptAsync
+
+**参考实现**: `packages/app/src/api/requirement-analyzer/index.ts:sendPromptToAIOnce()`
+
+**关键步骤**:
+
+1. **创建 Session**
+   ```typescript
+   const sessionResult = await client.session.create({});
+   const session = unwrap(sessionResult) as { id: string };
+   const sessionID = session.id;
+   ```
+
+2. **配置 Prompt 选项**（可选传入模型）
+   ```typescript
+   const promptOptions: any = {
+     sessionID,
+     parts: [{ type: 'text', text: prompt }],
+   };
+   if (model) {
+     promptOptions.model = model; // { providerID, modelID }
+   }
+   ```
+
+3. **发送并检查同步返回**
+   ```typescript
+   const result = await client.session.promptAsync(promptOptions);
+   
+   // 优先检查同步返回的数据
+   if (result && (result as any).data) {
+     const data = (result as any).data;
+     if (data.error) throw new Error(`AI failed: ${JSON.stringify(data.error)}`);
+     if (data.output) return data.output;
+     if (data.content) return data.content;
+   }
+   ```
+
+4. **轮询等待完成**（如果同步未返回）
+   ```typescript
+   const maxWaitTime = 5 * 60 * 1000; // 5 分钟超时
+   const pollInterval = 1000;          // 1 秒轮询
+   
+   while (Date.now() - startTime < maxWaitTime) {
+     await sleep(pollInterval);
+     
+     // 获取消息和状态
+     const messages = unwrap(await client.session.messages({ sessionID }));
+     const sessions = unwrap(await client.session.status());
+     const status = sessions[sessionID]?.type || sessions[sessionID]?.status;
+     
+     const assistantMsgs = messages.filter(m => m.info?.role === 'assistant');
+     if (assistantMsgs.length > 0) {
+       const lastMsg = assistantMsgs[assistantMsgs.length - 1];
+       
+       // 检查错误
+       if (lastMsg.info?.error) {
+         throw new Error(`AI error: ${JSON.stringify(lastMsg.info.error)}`);
+       }
+       
+       // Session 完成条件
+       if (!sessions[sessionID] || status === 'completed' || status === 'idle') {
+         return lastMsg.parts
+           .filter(p => p.type === 'text')
+           .map(p => p.text)
+           .join('');
+       }
+     }
+   }
+   ```
+
+**常见错误**:
+
+❌ **错误**: 调用 `promptAsync` 后立即返回，不等待 AI 完成  
+✅ **正确**: 同步检查返回 → 轮询等待 → 提取完整回复
+
+❌ **错误**: 不传 `model` 参数（无法指定模型）  
+✅ **正确**: 传入 `{ providerID, modelID }` 对象指定模型
+
+❌ **错误**: 只调用 `await client.session.promptAsync({ sessionID, parts })`  
+✅ **正确**: 必须检查返回/轮询获取结果，就像 `requirement-analyzer` 那样
+
 ## Safety + Accessibility
 
 * Default to least-privilege permissions and explicit user approvals.
