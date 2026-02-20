@@ -31,6 +31,22 @@ const reverseStatusMap: Record<ParsedTask["status"], string> = {
 export function parseTasks(markdown: string): ParsedTask[] {
   const tasks: ParsedTask[] = [];
   const lines = markdown.split("\n");
+  
+  // Try to parse ### Task X: format first
+  const taskList = parseTaskFormat(lines);
+  if (taskList.length > 0) {
+    return taskList;
+  }
+  
+  // Fallback: parse - [ ] checkbox format (Forge standard)
+  return parseCheckboxFormat(lines);
+}
+
+/**
+ * Parse ### Task X: Title format
+ */
+function parseTaskFormat(lines: string[]): ParsedTask[] {
+  const tasks: ParsedTask[] = [];
   let currentTask: Partial<ParsedTask> | null = null;
   let descriptionLines: string[] = [];
 
@@ -73,6 +89,37 @@ export function parseTasks(markdown: string): ParsedTask[] {
   if (currentTask) {
     currentTask.description = descriptionLines.join("\n").trim();
     tasks.push(currentTask as ParsedTask);
+  }
+
+  return tasks;
+}
+
+/**
+ * Parse - [ ] Checkbox format (Forge tasks.md standard)
+ */
+function parseCheckboxFormat(lines: string[]): ParsedTask[] {
+  const tasks: ParsedTask[] = [];
+  let taskIndex = 0;
+
+  for (const line of lines) {
+    // Match checkbox: - [ ] Task title  or  - [x] Task title
+    const checkboxMatch = line.match(/^\s*- \[([xX ])\]\s*(.+)$/);
+    if (checkboxMatch) {
+      const isChecked = checkboxMatch[1].toLowerCase() === 'x';
+      const title = checkboxMatch[2].trim();
+      
+      // Skip phase headers (e.g., "## Phase 1: ...")
+      if (title.match(/^Phase \d+:/i)) {
+        continue;
+      }
+
+      tasks.push({
+        index: taskIndex++,
+        title: title,
+        status: isChecked ? "completed" : "pending",
+        description: "",
+      });
+    }
   }
 
   return tasks;
