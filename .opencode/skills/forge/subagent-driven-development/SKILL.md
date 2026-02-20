@@ -53,7 +53,7 @@ digraph process {
         "Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)" [shape=box];
         "Code quality reviewer subagent approves?" [shape=diamond];
         "Implementer subagent fixes quality issues" [shape=box];
-        "Mark task complete in TodoWrite" [shape=box];
+        "Mark task complete in TodoWrite AND edit tasks.md to update checkbox" [shape=box];
     }
 
     "Read tasks file, extract all tasks with full text, note context, create TodoWrite" [shape=box];
@@ -87,6 +87,15 @@ digraph process {
 - `./implementer-prompt.md` - Dispatch implementer subagent
 - `./spec-reviewer-prompt.md` - Dispatch spec compliance reviewer subagent
 - `./code-quality-reviewer-prompt.md` - Dispatch code quality reviewer subagent
+- `./TASK-STATE-UPDATE.md` - **REQUIRED**: Protocol for updating task state in tasks.md
+
+## Task State Update Protocol (CRITICAL)
+
+**Before executing any task:**
+1. Read `./TASK-STATE-UPDATE.md`
+2. **必须**在 tasks.md 中实时更新 checkbox 状态
+3. 每完成一个子步骤，立即编辑文件标记为 `- [x]`
+4. 禁止只在 TodoWrite 中标记而不编辑 tasks.md
 
 ## Example Workflow
 
@@ -119,7 +128,8 @@ Spec reviewer: ✅ Spec compliant - all requirements met, nothing extra
 [Get git SHAs, dispatch code quality reviewer]
 Code reviewer: Strengths: Good test coverage, clean. Issues: None. Approved.
 
-[Mark Task 1 complete]
+[Edit tasks.md to mark Task 1 checkbox - [x]]
+[Update TodoWrite]
 
 Task 2: Recovery modes
 

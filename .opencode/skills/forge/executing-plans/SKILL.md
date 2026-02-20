@@ -19,16 +19,17 @@ Load plan, review critically, execute tasks in batches, report for review betwee
 1. Read plan file (`forge/tracks/<change>/tasks.md`)
 2. Review critically - identify any questions or concerns about the plan
 3. If concerns: Raise them with your human partner before starting
-4. If no concerns: Create TodoWrite and proceed
+4. If no concerns: Check current task status in file, then proceed to mark next incomplete task as in_progress
 
 ### Step 2: Execute Batch
 **Default: First 3 tasks**
 
 For each task:
-1. Mark as in_progress
+1. **Edit tasks.md** to mark task as in_progress: change `- [ ]` to `- [x]` for completed items
 2. Follow each step exactly (plan has bite-sized steps)
 3. Run verifications as specified
-4. Mark as completed
+4. **Edit tasks.md** to mark task as completed: change `- [ ]` to `- [x]`
+5. **Show progress** - After each completion, display current tasks.md status
 
 **Forge note:** When plans live in `forge/tracks/<change>/tasks.md`, show progress as `N/M tasks complete` and pause if a task is unclear or artifacts are missing.
 
@@ -60,6 +61,16 @@ After all tasks complete and verified:
 - Verification fails repeatedly
 
 **Ask for clarification rather than guessing.**
+
+## CRITICAL: Task State Management
+
+**必须实时更新 tasks.md 文件：**
+- ✅ DO: 每完成一个子步骤，立即编辑 tasks.md 中的 checkbox
+- ✅ DO: 使用 edit 工具修改 `- [ ]` 为 `- [x]`
+- ❌ DON'T: 只在 TodoWrite 中标记，不编辑 tasks.md 文件
+- ❌ DON'T: 等所有任务完成后再批量更新
+
+**Why:** tasks.md 是永久审计记录，TodoWrite 是临时会话状态。
 
 ## When to Revisit Earlier Steps
 

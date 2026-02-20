@@ -29,6 +29,8 @@ Single entry for the execution stage: ensure an isolated workspace, pick an exec
    - Need batch checkpoints or separate session → `forge:executing-plans`
 4. **Execute tasks**
    - Follow the chosen skill exactly
+   - **CRITICAL**: Update tasks.md checkbox status after each task/sub-task completion
+   - Verify tasks.md reflects actual progress before moving to next batch
 5. **Finish the branch**
    - Use `forge:finishing-a-development-branch`
    - If using Forge, ensure `forge-archive` is complete before finishing
@@ -62,6 +64,7 @@ Answer these in order:
 - Executing on main/master without a worktree
 - Starting execution without a plan
 - Skipping finish workflow after tasks complete
+- **Not updating tasks.md checkbox status after task completion (only updating TodoWrite)**
 
 ## Integration
 
