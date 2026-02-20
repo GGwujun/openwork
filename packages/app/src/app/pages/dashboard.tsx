@@ -19,6 +19,7 @@ import type {
 import type { ParsedTask } from "../lib/tasks-parser";
 import type { McpDirectoryInfo } from "../constants";
 import type { Language } from "../../i18n";
+import type { PlanWizardState, RepositoryMatch } from "../../types/requirement-analyzer";
 import { currentLocale, t } from "../../i18n";
 import { appDataDir } from "@tauri-apps/api/path";
 import { formatRelativeTime, isTauriRuntime, normalizeDirectoryPath } from "../utils";
@@ -155,6 +156,19 @@ export type DashboardViewProps = {
   taskCenterSelectItem: (item: TaskCenterItem | null) => void;
   taskCenterExecuteTask: (item: TaskCenterItem, taskIndex: number) => void;
   taskCenterCompleteTask: (item: TaskCenterItem, taskIndex: number) => void;
+  taskCenterShowTaskPanel: boolean;
+  taskCenterSetShowTaskPanel: (show: boolean) => void;
+  taskCenterClearAutomationState?: () => void;
+  taskCenterWizard?: PlanWizardState;
+  taskCenterWizardActions?: {
+    open: () => void;
+    close: () => void;
+    nextStep: () => void;
+    prevStep: () => void;
+    analyzeRequirement: (workItemId: number) => Promise<void>;
+    toggleRepo: (repo: RepositoryMatch) => void;
+    generatePlan: (item: TaskCenterItem) => Promise<void>;
+  };
   refreshScheduledJobs: (options?: { force?: boolean }) => void;
   deleteScheduledJob: (name: string) => Promise<void> | void;
   activeWorkspaceRoot: string;
@@ -1325,9 +1339,14 @@ export default function DashboardView(props: DashboardViewProps) {
                 tasks={props.taskCenterTasks}
                 currentTaskIndex={props.taskCenterCurrentTaskIndex}
                 executing={props.taskCenterExecuting}
+                showTaskPanel={props.taskCenterShowTaskPanel}
+                setShowTaskPanel={props.taskCenterSetShowTaskPanel}
                 onSelectItem={props.taskCenterSelectItem}
                 onExecuteTask={props.taskCenterExecuteTask}
                 onCompleteTask={props.taskCenterCompleteTask}
+                clearAutomationState={props.taskCenterClearAutomationState}
+                wizard={props.taskCenterWizard}
+                wizardActions={props.taskCenterWizardActions}
               />
             </Match>
             <Match when={props.tab === "skills"}>

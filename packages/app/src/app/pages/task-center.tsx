@@ -2,9 +2,12 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "so
 
 import type { TaskCenterItem, TaskCenterStatus, TaskCenterStage } from "../types";
 import type { ParsedTask } from "../lib/tasks-parser";
+import type { ParsedRequirement, RepositoryMatch, DetectionResult, PlanWizardState } from "../../types/requirement-analyzer";
+
 import { formatRelativeTime } from "../utils";
 import { usePlatform } from "../context/platform";
 import { currentLocale, t } from "../../i18n";
+import RequirementWizard from "../components/requirement-wizard";
 
 import Button from "../components/button";
 import {
@@ -16,6 +19,7 @@ import {
   Loader2,
   Play,
   RefreshCw,
+  Trash2,
   X,
 } from "lucide-solid";
 
@@ -65,17 +69,30 @@ export type TaskCenterViewProps = {
   lastUpdatedAt: number | null;
   syncTasks: (options?: { force?: boolean }) => void;
   startAutomation: (item: TaskCenterItem) => void;
-  // TFS Configuration props
-  tfsConfig?: { serverUrl: string; pat: string; username?: string };
-  setTfsConfig?: (config: { serverUrl: string; pat: string; username?: string }) => void;
   // Task execution props
   selectedItem?: TaskCenterItem | null;
   tasks?: ParsedTask[];
   currentTaskIndex?: number;
   executing?: boolean;
+  showTaskPanel?: boolean;
+  setShowTaskPanel?: (show: boolean) => void;
   onSelectItem?: (item: TaskCenterItem | null) => void;
   onExecuteTask?: (item: TaskCenterItem, taskIndex: number) => void;
   onCompleteTask?: (item: TaskCenterItem, taskIndex: number) => void;
+  // Requirement Analysis Wizard props
+  wizard?: PlanWizardState;
+  wizardActions?: {
+    open: () => void;
+    close: () => void;
+    nextStep: () => void;
+    prevStep: () => void;
+    analyzeRequirement: (workItemId: number) => Promise<void>;
+    toggleRepo: (repo: RepositoryMatch) => void;
+    generatePlan: (item: TaskCenterItem) => Promise<void>;
+    createDevelopmentPlan: (item: TaskCenterItem) => Promise<void>;
+  };
+  // Dev/Test props
+  clearAutomationState?: () => void;
 };
 
 const STATUS_ORDER: TaskCenterStatus[] = ["todo", "progress", "done", "failed", "archived"];
@@ -291,9 +308,19 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
     return mainLabel;
   };
 
-  // Local state for task execution panel
-  const [showTaskPanel, setShowTaskPanel] = createSignal(false);
-  const [selectedItem, setSelectedItem] = createSignal<TaskCenterItem | null>(null);
+  // Local state for task execution panel - now managed in store
+  const [localSelectedItem, setLocalSelectedItem] = createSignal<TaskCenterItem | null>(null);
+  // Keep track of the item being processed in the wizard
+  let currentWizardItem: TaskCenterItem | null = null;
+
+  // Use store state if available, otherwise fallback to local
+  const showTaskPanel = () => props.showTaskPanel ?? false;
+  const setShowTaskPanel = (show: boolean) => props.setShowTaskPanel?.(show);
+  const selectedItem = () => props.selectedItem ?? localSelectedItem();
+  const setSelectedItem = (item: TaskCenterItem | null) => {
+    setLocalSelectedItem(item);
+    props.onSelectItem?.(item);
+  };
 
   createEffect(() => {
     if (!props.clientConnected) return;
@@ -302,10 +329,19 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
     onCleanup(() => window.clearInterval(interval));
   });
 
-  const handleStartAutomation = (item: TaskCenterItem) => {
+  const handleStartAutomation = async (item: TaskCenterItem) => {
+    currentWizardItem = item; // Store the item for use in wizard
     setSelectedItem(item);
-    setShowTaskPanel(true);
-    props.startAutomation(item);
+    
+    // Use wizard if available
+    if (props.wizardActions) {
+      props.wizardActions.open();
+      await props.wizardActions.analyzeRequirement(item.tfsId);
+    } else {
+      // Fallback to direct execution
+      setShowTaskPanel(true);
+      props.startAutomation(item);
+    }
   };
 
   const handleClosePanel = () => {
@@ -327,6 +363,13 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
     }
   };
 
+  const handleClearAutomation = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('[TaskCenter] Clear button clicked, clearing automation state...');
+    props.clearAutomationState?.();
+  };
+
   return (
     <section class="space-y-4">
       <div class="-mt-3 rounded-3xl border border-dls-border bg-dls-surface px-4 py-2 shadow-sm">
@@ -336,7 +379,16 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
               {translate("task_center.sync_hint")}
             </p>
           </div>
-          <div class="flex flex-col gap-3 sm:items-end">
+          <div class="flex items-center gap-2">
+            <Button
+              variant="outline"
+              class="h-8 px-3 text-[11px] text-red-600 border-red-200 hover:bg-red-50"
+              onClick={handleClearAutomation}
+              title="清空进行中的数据（测试用）"
+            >
+              <Trash2 size={14} />
+              清除
+            </Button>
             <Button
               variant="outline"
               class="h-8 px-3 text-[11px]"
@@ -369,6 +421,31 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
           onClose={handleClosePanel}
           onExecuteTask={handleExecuteTask}
           onCompleteTask={handleCompleteTask}
+        />
+      </Show>
+
+      {/* Requirement Analysis Wizard */}
+      <Show when={props.wizard?.isOpen}>
+        <RequirementWizard
+          wizard={props.wizard!}
+          step={props.wizard?.step ?? 1}
+          requirement={(props.wizard?.requirement as ParsedRequirement) ?? null}
+          detection={(props.wizard?.detection as DetectionResult) ?? null}
+          selectedRepos={(props.wizard?.selectedRepos as RepositoryMatch[]) ?? []}
+          isLoading={props.wizard?.isLoading ?? false}
+          error={props.wizard?.error ?? null}
+          generationProgress={props.wizard?.generationProgress ?? 0}
+          intent={props.wizard?.intent}
+          design={props.wizard?.design}
+          tasks={props.wizard?.tasks}
+          autoPlanStep={props.wizard?.autoPlanStep}
+          autoPlanProgress={props.wizard?.autoPlanProgress}
+          onClose={() => props.wizardActions?.close()}
+          onNextStep={() => props.wizardActions?.nextStep()}
+          onPrevStep={() => props.wizardActions?.prevStep()}
+          onToggleRepo={(repo) => props.wizardActions?.toggleRepo(repo)}
+          onGeneratePlan={() => currentWizardItem && props.wizardActions?.generatePlan(currentWizardItem)}
+          onCreateDevelopmentPlan={() => currentWizardItem && props.wizardActions?.createDevelopmentPlan(currentWizardItem)}
         />
       </Show>
 

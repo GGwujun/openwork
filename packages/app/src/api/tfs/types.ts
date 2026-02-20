@@ -22,6 +22,7 @@ export interface TFSWorkItemFields {
   'Microsoft.VSTS.Common.Priority'?: number | string;
   'Microsoft.VSTS.Common.AcceptanceCriteria'?: string;
   'System.Reason'?: string;
+  'Winning.Demand.Analysis'?: string; // 需求分析字段
   [key: string]: unknown;
 }
 

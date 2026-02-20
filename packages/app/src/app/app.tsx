@@ -3746,6 +3746,7 @@ export default function App() {
 
   const taskCenterStore = createTaskCenterStore({
     client,
+    getSelectedModel: selectedSessionModel,
     activeWorkspaceRoot: () => workspaceStore.activeWorkspaceRoot().trim(),
     createSessionAndOpen,
     setPrompt,
@@ -4559,6 +4560,11 @@ export default function App() {
       taskCenterSelectItem: taskCenterStore.selectItem,
       taskCenterExecuteTask: taskCenterStore.executeTaskStep,
       taskCenterCompleteTask: taskCenterStore.completeTaskStep,
+      taskCenterShowTaskPanel: taskCenterStore.showTaskPanel(),
+      taskCenterSetShowTaskPanel: taskCenterStore.setShowTaskPanel,
+      taskCenterClearAutomationState: taskCenterStore.clearAutomationState,
+      taskCenterWizard: taskCenterStore.wizard,
+      taskCenterWizardActions: taskCenterStore.wizardActions,
       refreshScheduledJobs: (options?: { force?: boolean }) =>
         refreshScheduledJobs(options).catch(() => undefined),
       deleteScheduledJob,

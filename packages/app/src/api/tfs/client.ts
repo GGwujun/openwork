@@ -58,7 +58,20 @@ export class TFSClient {
   }
 
   /**
-   * 发起 API 请求
+   * 获取用于 PATCH 请求的身份验证头（json-patch 格式）
+   */
+  private getPatchAuthHeaders(): Record<string, string> {
+    // TFS 2018 PATCH 请求必须使用 application/json-patch+json
+    const encodedPat = btoa(`:${this.pat}`);
+    return {
+      'Authorization': `Basic ${encodedPat}`,
+      'Content-Type': 'application/json-patch+json',
+      'Accept': 'application/json'
+    };
+  }
+
+  /**
+   * 发起 API 请求（普通 GET/POST）
    */
   private async fetchApi<T>(url: string, options: RequestInit = {}): Promise<T> {
     const response = await fetch(url, {
@@ -160,7 +173,7 @@ export class TFSClient {
       SELECT [System.Id], [System.Title], [System.State], [System.AssignedTo]
       FROM WorkItems
       WHERE [System.WorkItemType] = 'Task'
-      AND [System.State] <> 'Closed'
+      AND [System.State] <> '已关闭'
       AND ${this.getAssignedToClause()}
     `;
 
@@ -226,7 +239,7 @@ export class TFSClient {
       SELECT [System.Id], [System.Title], [System.State], [Microsoft.VSTS.Common.Severity]
       FROM WorkItems
       WHERE [System.WorkItemType] = 'Bug'
-      AND [System.State] <> 'Closed'
+      AND [System.State] <> '已关闭'
     `;
 
     if (project) {
@@ -244,7 +257,7 @@ export class TFSClient {
   async getRecentResolvedWorkItems(
     project?: string,
     days = 7,
-    states = ['Resolved', 'Closed']
+    states = ['已解决', '已关闭']
   ): Promise<WorkItem[]> {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
@@ -313,7 +326,8 @@ export class TFSClient {
 
     const url = `${this.serverUrl}/${encodeURIComponent(project)}/_apis/wit/workitems/$${workItemType}?api-version=4.1`;
     return await this.fetchApi<WorkItem>(url, {
-      method: 'POST',
+      method: 'PATCH',
+      headers: this.getPatchAuthHeaders(),
       body: JSON.stringify(document)
     });
   }
@@ -338,95 +352,51 @@ export class TFSClient {
       });
     }
 
-    const url = `${this.serverUrl}/_apis/wit/workitems/${id}?api-version=4.1`;
-    return await this.fetchApi<WorkItem>(url, {
-      method: 'PATCH',
-      body: JSON.stringify(document)
-    });
-  }
-
-  /**
-   * 更新工作项状态（带完整上下文）- 任务中心专用
-   */
-  async updateWorkItemStateWithContext(
-    id: number,
-    newState: string,
-    options: { comment?: string | null; prUrl?: string | null; prTitle?: string | null } = {}
-  ): Promise<FormattedWorkItem> {
-    const { comment = null, prUrl = null, prTitle = null } = options;
-
-    const document: Array<{ op: 'add' | 'replace'; path: string; value: unknown }> = [
-      { op: 'replace', path: '/fields/System.State', value: newState }
-    ];
-
-    // 添加评论
-    if (comment) {
-      document.push({
-        op: 'add',
-        path: '/fields/System.History',
-        value: comment
-      });
-    }
-
-    // 关联 PR
-    if (prUrl) {
-      const linkText = prTitle ? `Pull Request: ${prTitle}` : 'Pull Request';
-      document.push({
-        op: 'add',
-        path: '/relations/-',
-        value: {
-          rel: 'ArtifactLink',
-          url: prUrl,
-          attributes: {
-            name: linkText
-          }
-        }
-      });
-    }
-
-    const url = `${this.serverUrl}/_apis/wit/workitems/${id}?api-version=4.1`;
+    const url = `${this.serverUrl}/_apis/wit/workitems/${id}?api-version=2.2`;
     const result = await this.fetchApi<WorkItem>(url, {
       method: 'PATCH',
+      headers: this.getPatchAuthHeaders(),
       body: JSON.stringify(document)
     });
     return this.formatWorkItemForTaskCenter(result);
   }
 
   /**
-   * 将工作项标记为进行中（Active）- 任务中心专用
+   * 将工作项标记为进行中（活动）- 任务中心专用
    */
   async activateWorkItem(id: number, comment?: string): Promise<FormattedWorkItem> {
     const defaultComment = comment || '任务已开始处理 (via Task Center)';
-    return await this.updateWorkItemStateWithContext(id, 'Active', {
-      comment: defaultComment
-    });
+    // TFS 2018 使用中文状态值
+    await this.updateWorkItemState(id, '活动', defaultComment);
+    // Reload the work item to get formatted result
+    const workItem = await this.getWorkItemDetail(id);
+    return workItem;
   }
 
   /**
-   * 将工作项标记为已解决（Resolved）- 任务中心专用
+   * 将工作项标记为已解决 - 任务中心专用
    */
   async resolveWorkItem(
     id: number,
     options: { comment?: string; prUrl?: string; prTitle?: string } = {}
   ): Promise<FormattedWorkItem> {
-    const { comment = null, prUrl = null, prTitle = null } = options;
+    const { comment = null } = options;
     const defaultComment = comment || '任务已完成，代码已提交 (via Task Center)';
-
-    return await this.updateWorkItemStateWithContext(id, 'Resolved', {
-      comment: defaultComment,
-      prUrl,
-      prTitle
-    });
+    // TFS 2018 使用中文状态值
+    await this.updateWorkItemState(id, '已解决', defaultComment || undefined);
+    const workItem = await this.getWorkItemDetail(id);
+    return workItem;
   }
 
   /**
-   * 将工作项标记为已关闭（Closed）- 任务中心专用
+   * 将工作项标记为已关闭 - 任务中心专用
    */
   async closeWorkItem(id: number, comment?: string): Promise<FormattedWorkItem> {
     const defaultComment = comment || '任务已验证通过并关闭 (via Task Center)';
-    return await this.updateWorkItemStateWithContext(id, 'Closed', {
-      comment: defaultComment
-    });
+    // TFS 2018 使用中文状态值
+    await this.updateWorkItemState(id, '已关闭', defaultComment);
+    const workItem = await this.getWorkItemDetail(id);
+    return workItem;
   }
 
   /**
@@ -436,9 +406,10 @@ export class TFSClient {
     const document = [
       { op: 'add' as const, path: '/fields/System.History', value: comment }
     ];
-    const url = `${this.serverUrl}/_apis/wit/workitems/${workItemId}?api-version=4.1`;
+    const url = `${this.serverUrl}/_apis/wit/workitems/${workItemId}?api-version=2.2`;
     return await this.fetchApi<WorkItem>(url, {
       method: 'PATCH',
+      headers: this.getPatchAuthHeaders(),
       body: JSON.stringify(document)
     });
   }
@@ -618,7 +589,8 @@ export class TFSClient {
     options: { states?: string[]; days?: number; top?: number } = {}
   ): Promise<FormattedWorkItem[]> {
     const {
-      states = ['New', 'Active', 'Resolved'],
+      // TFS 2018 中文版使用中文状态值
+      states = ['已建议', '活动', '已解决'],
       days = 30,
       top = 200
     } = options;

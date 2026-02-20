@@ -57,6 +57,20 @@ export default function LoginPage() {
     try {
       // Step 1: Get login URL from server
       const response = await fetch(`${API_BASE}/api/login-url`);
+      
+      // Check if response is OK and is JSON
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`Server error ${response.status}: ${text.substring(0, 100)}`);
+      }
+      
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('[Login] Server returned non-JSON:', text.substring(0, 200));
+        throw new Error('Server returned invalid response. Please check if the server is running.');
+      }
+      
       const result = await response.json();
       
       if (!result.success) {
@@ -325,17 +339,6 @@ export default function LoginPage() {
             {error()}
           </div>
         </Show>
-
-        {/* Instructions */}
-        <div class="mt-4 p-3 bg-slate-800/30 rounded-lg border border-slate-600/30">
-          <h3 class="text-xs font-medium text-slate-300 mb-1.5">如何登录：</h3>
-          <ol class="text-xs text-slate-400 space-y-1 list-decimal list-inside">
-            <li>打开企业微信 App</li>
-            <li>点击右上角 + 号</li>
-            <li>选择"扫一扫"</li>
-            <li>扫描上方二维码</li>
-          </ol>
-        </div>
 
         {/* Footer */}
         <div class="mt-5 text-center text-xs text-slate-500">
