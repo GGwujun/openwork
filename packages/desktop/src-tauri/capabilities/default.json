@@ -13,6 +13,31 @@
     "opener:allow-open-path",
     "opener:allow-open-url",
     "opener:allow-default-urls",
+    "shell:allow-execute",
+    "shell:allow-open",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "args": ["-c", { "validator": ".*" }],
+          "cmd": "sh",
+          "name": "exec-sh",
+          "sidecar": false
+        },
+        {
+          "args": ["/C", { "validator": ".*" }],
+          "cmd": "cmd",
+          "name": "exec-cmd",
+          "sidecar": false
+        },
+        {
+          "args": true,
+          "cmd": "git",
+          "name": "exec-git",
+          "sidecar": false
+        }
+      ]
+    },
     {
       "identifier": "http:default",
       "allow": [

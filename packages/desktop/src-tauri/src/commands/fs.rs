@@ -22,6 +22,14 @@ pub struct FileReadResult {
 }
 
 fn normalize_path(path: &Path) -> Result<PathBuf, String> {
+    // Windows 下使用绝对路径规范化
+    #[cfg(windows)]
+    {
+        // 如果已经是绝对路径，就使用它
+        if path.is_absolute() {
+            return Ok(path.to_path_buf());
+        }
+    }
     std::fs::canonicalize(path).map_err(|e| format!("Failed to resolve path: {e}"))
 }
 
@@ -33,11 +41,28 @@ fn ensure_path_allowed(path: &Path, workspace_root: &Path) -> Result<(), String>
         return Err("Workspace root is not a directory".to_string());
     }
 
-    let root = normalize_path(workspace_root)?;
-    let target = normalize_path(path)?;
-
-    if !target.starts_with(&root) {
-        return Err("Path is outside workspace".to_string());
+    // 转换 workspace_root 为绝对路径
+    let root = if workspace_root.is_absolute() {
+        workspace_root.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("Failed to get current dir: {e}"))?
+            .join(workspace_root)
+    };
+    
+    // 转换 target 为绝对路径
+    let target = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    
+    // 检查 target 是否以 root 开头（使用规范化后的字符串比较）
+    let root_str = root.to_string_lossy().to_lowercase();
+    let target_str = target.to_string_lossy().to_lowercase();
+    
+    if !target_str.starts_with(&root_str) {
+        return Err(format!("Path '{}' is outside workspace '{}'", target.display(), root.display()));
     }
 
     Ok(())
@@ -194,6 +219,55 @@ pub async fn fs_read_file(path: String, workspace_root: String) -> Result<FileRe
         size,
         language,
     })
+}
+
+/// 写入文件内容
+#[tauri::command]
+pub async fn fs_write_file(path: String, content: String, workspace_root: String) -> Result<(), String> {
+    let workspace_root = workspace_root.trim();
+    if workspace_root.is_empty() {
+        return Err("workspace_root is required".to_string());
+    }
+
+    // 检查 workspace_root 是否存在
+    let workspace_path = Path::new(workspace_root);
+    if !workspace_path.exists() {
+        return Err(format!("Workspace root does not exist: {}", workspace_root));
+    }
+    
+    if !workspace_path.is_dir() {
+        return Err(format!("Workspace root is not a directory: {}", workspace_root));
+    }
+
+    let path_obj = Path::new(&path);
+    let resolved_path = if path_obj.is_absolute() {
+        path_obj.to_path_buf()
+    } else {
+        workspace_path.join(path_obj)
+    };
+
+    ensure_path_allowed(&resolved_path, workspace_path)?;
+    
+    // 确保父目录存在（递归创建）
+    if let Some(parent) = resolved_path.parent() {
+        if !parent.exists() {
+            match std::fs::create_dir_all(parent) {
+                Ok(_) => {},
+                Err(e) => {
+                    // 如果创建失败，可能是目录已存在（竞争条件）
+                    if !parent.exists() {
+                        return Err(format!("Failed to create parent directory '{}': {}", parent.display(), e));
+                    }
+                }
+            }
+        }
+    }
+    
+    // 写入文件
+    std::fs::write(&resolved_path, content)
+        .map_err(|e| format!("Failed to write file '{}': {}", resolved_path.display(), e))?;
+    
+    Ok(())
 }
 
 /// 检查是否为隐藏文件/目录
