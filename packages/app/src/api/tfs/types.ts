@@ -111,6 +111,9 @@ export interface CreateWorkItemFields {
   assignedTo?: string;
   priority?: number;
   parentId?: number;
+  tags?: string;
+  startDate?: string;
+  finishDate?: string;
 }
 
 // 项目列表

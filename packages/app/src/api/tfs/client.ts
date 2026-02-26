@@ -3,6 +3,7 @@
  * 使用原生 fetch API，兼容 Tauri WebView 环境
  */
 
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type {
   TFSConfig,
   FormattedWorkItem,
@@ -10,12 +11,14 @@ import type {
   QueryWorkItemsOptions
 } from './types';
 import { DEFAULT_SERVER_URL, PROJECTS } from './types';
+import { isTauriRuntime } from "../../app/utils";
 
 // 定义最小化的 WorkItem 类型
 interface WorkItem {
   id?: number;
   fields?: Record<string, unknown>;
   workItems?: Array<{ id?: number; url?: string }>;
+  relations?: Array<{ rel?: string; url?: string; attributes?: Record<string, unknown> }>;
 }
 
 // 定义最小化的 Commit 类型
@@ -74,13 +77,22 @@ export class TFSClient {
    * 发起 API 请求（普通 GET/POST）
    */
   private async fetchApi<T>(url: string, options: RequestInit = {}): Promise<T> {
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        ...this.getAuthHeaders(),
-        ...options.headers
+    const fetchImpl = isTauriRuntime() ? tauriFetch : fetch;
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        ...options,
+        headers: {
+          ...this.getAuthHeaders(),
+          ...options.headers
+        }
+      });
+    } catch (error) {
+      if (!isTauriRuntime() && error instanceof TypeError) {
+        throw new Error("浏览器请求被 CORS 拦截，请使用桌面版或配置反向代理");
       }
-    });
+      throw error;
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -313,6 +325,30 @@ export class TFSClient {
       });
     }
 
+    if (fields.tags) {
+      document.push({
+        op: 'add',
+        path: '/fields/System.Tags',
+        value: fields.tags
+      });
+    }
+
+    if (fields.startDate) {
+      document.push({
+        op: 'add',
+        path: '/fields/Microsoft.VSTS.Scheduling.StartDate',
+        value: fields.startDate
+      });
+    }
+
+    if (fields.finishDate) {
+      document.push({
+        op: 'add',
+        path: '/fields/Microsoft.VSTS.Scheduling.FinishDate',
+        value: fields.finishDate
+      });
+    }
+
     if (fields.parentId) {
       document.push({
         op: 'add',
@@ -326,11 +362,193 @@ export class TFSClient {
 
     const url = `${this.serverUrl}/${encodeURIComponent(project)}/_apis/wit/workitems/$${workItemType}?api-version=4.1`;
     return await this.fetchApi<WorkItem>(url, {
+      method: 'POST',
+      headers: this.getPatchAuthHeaders(),
+      body: JSON.stringify(document)
+    });
+  }
+
+  /**
+   * 在父任务上添加子级关系链接
+   */
+  async addChildLink(parentId: number, childId: number, comment?: string): Promise<WorkItem> {
+    const value: { rel: string; url: string; attributes?: Record<string, unknown> } = {
+      rel: 'System.LinkTypes.Hierarchy-Forward',
+      url: `${this.serverUrl}/_apis/wit/workItems/${childId}`
+    };
+    if (comment) {
+      value.attributes = { comment };
+    }
+
+    const document: Array<{ op: string; path: string; value: unknown }> = [
+      {
+        op: 'add',
+        path: '/relations/-',
+        value
+      }
+    ];
+
+    const url = `${this.serverUrl}/_apis/wit/workitems/${parentId}?api-version=4.1`;
+    return await this.fetchApi<WorkItem>(url, {
       method: 'PATCH',
       headers: this.getPatchAuthHeaders(),
       body: JSON.stringify(document)
     });
   }
+
+  /**
+   * 创建子任务（自动关联父任务）
+   * @param project 项目名称
+   * @param fields 任务字段
+   * @param parentId 父任务ID
+   * @param tags 标签（可选）
+   */
+  async createChildTask(
+    project: string,
+    fields: CreateWorkItemFields,
+    parentId: number,
+    tags?: string
+  ): Promise<WorkItem> {
+    console.log('[TFS Client] createChildTask called:', { project, parentId, tags, title: fields.title });
+
+    const nowIso = new Date().toISOString();
+    const createFields: CreateWorkItemFields = {
+      ...fields,
+      tags: tags || fields.tags,
+      startDate: fields.startDate ?? nowIso,
+      finishDate: fields.finishDate ?? nowIso
+    };
+
+    const workItemTypes = ['Task', '任务'];
+    let created: WorkItem | null = null;
+    let lastError: unknown;
+
+    for (const type of workItemTypes) {
+      try {
+        console.log('[TFS Client] Creating task work item type:', type);
+        created = await this.createWorkItem(project, type, createFields);
+        break;
+      } catch (error) {
+        lastError = error;
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn('[TFS Client] Create work item failed for type:', type, message);
+      }
+    }
+
+    if (!created?.id) {
+      console.error('[TFS Client] Failed to create task work item');
+      throw lastError || new Error('Failed to create task work item');
+    }
+
+    console.log('[TFS Client] Task created:', created.id, 'linking to parent...');
+    await this.addChildLink(parentId, created.id, '添加子任务');
+    console.log('[TFS Client] Child link added to parent:', parentId);
+    return created;
+  }
+
+
+  /**
+   * 获取子任务列表
+   * @param parentId 父任务ID
+   * @param project 项目名称（可选）
+   * @param includeTags 标签过滤（可选）
+   */
+  async getChildTasks(
+    parentId: number,
+    project?: string,
+    includeTags?: string[]
+  ): Promise<WorkItem[]> {
+    const url = `${this.serverUrl}/_apis/wit/workitems/${parentId}?api-version=4.1${project ? `&project=${encodeURIComponent(project)}` : ''}&$expand=relations`;
+    const result = await this.fetchApi<WorkItem>(url);
+
+    const ids = (result.relations || [])
+      .filter(rel => rel?.rel === 'System.LinkTypes.Hierarchy-Forward')
+      .map(rel => {
+        const match = rel?.url?.match(/workItems\/(\d+)/i);
+        return match ? Number(match[1]) : null;
+      })
+      .filter((id): id is number => typeof id === 'number');
+
+    let items = await this.getWorkItems(ids, project);
+
+    if (includeTags && includeTags.length > 0) {
+      items = items.filter(item => {
+        const tags = String(item.fields?.['System.Tags'] || '');
+        return includeTags.some(tag => tags.includes(tag));
+      });
+    }
+
+    // 仅保留任务类型（中英文兼容）
+    items = items.filter(item => {
+      const type = String(item.fields?.['System.WorkItemType'] || '');
+      return type === 'Task' || type === '任务';
+    });
+
+    return items;
+  }
+
+  /**
+   * 检查是否已存在特定标签的子任务
+   * @param parentId 父任务ID
+   * @param tag 标签
+   * @param project 项目名称（可选）
+   */
+  async hasChildTaskWithTag(
+    parentId: number,
+    tag: string,
+    project?: string
+  ): Promise<{ exists: boolean; taskId?: number; task?: WorkItem }> {
+    const children = await this.getChildTasks(parentId, project, [tag]);
+    
+    if (children.length > 0) {
+      return {
+        exists: true,
+        taskId: children[0].id,
+        task: children[0]
+      };
+    }
+    
+    return { exists: false };
+  }
+
+  /**
+   * 更新任务描述
+   * @param id 任务ID
+   * @param description 新描述
+   * @param append 是否追加模式（默认false）
+   */
+  async updateTaskDescription(
+    id: number,
+    description: string,
+    append = false
+  ): Promise<WorkItem> {
+    const document: Array<{ op: string; path: string; value: unknown }> = [];
+
+    if (append) {
+      // 追加模式：先获取现有描述
+      const existing = await this.getWorkItem(id);
+      const existingDesc = String(existing?.fields?.['System.Description'] || '');
+      document.push({
+        op: 'replace',
+        path: '/fields/System.Description',
+        value: existingDesc + '\n\n---\n\n' + description
+      });
+    } else {
+      document.push({
+        op: 'replace',
+        path: '/fields/System.Description',
+        value: description
+      });
+    }
+
+    const url = `${this.serverUrl}/_apis/wit/workitems/${id}?api-version=4.1`;
+    return await this.fetchApi<WorkItem>(url, {
+      method: 'PATCH',
+      headers: this.getPatchAuthHeaders(),
+      body: JSON.stringify(document)
+    });
+  }
+
 
   /**
    * 更新工作项状态

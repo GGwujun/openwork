@@ -35,6 +35,13 @@ interface RequirementWizardProps {
   onToggleRepo: (repo: RepositoryMatch) => void;
   onGeneratePlan: () => void;
   onCreateDevelopmentPlan?: () => void;
+  onSyncToTFS?: () => Promise<boolean>;
+  syncStatus?: {
+    analysisSynced: boolean;
+    planSynced: boolean;
+    isSyncing: boolean;
+    error?: string;
+  };
 }
 
 export default function RequirementWizard(props: RequirementWizardProps) {
@@ -60,11 +67,11 @@ export default function RequirementWizard(props: RequirementWizardProps) {
 
         {/* Step Indicator */}
         <div class="flex items-center justify-center gap-2 px-6 py-4 border-b border-dls-border bg-dls-hover/30">
-          <StepDot step={1} current={props.step} label="需求分析" />
+          <StepDot step={1} current={props.step} label="需求分析" completed={props.step > 1 || (props.step === 1 && props.autoPlanStep === 'completed')} />
           <StepLine active={props.step >= 2} />
-          <StepDot step={2} current={props.step} label="仓库识别" />
+          <StepDot step={2} current={props.step} label="仓库识别" completed={props.step > 2 || (props.step === 2 && props.autoPlanStep === 'completed')} />
           <StepLine active={props.step >= 3} />
-          <StepDot step={3} current={props.step} label="生成计划" />
+          <StepDot step={3} current={props.step} label="生成计划" completed={props.step === 3 && (props.autoPlanStep === 'completed' || !!(props.intent || props.design || props.tasks))} />
         </div>
 
         {/* Content */}
@@ -86,8 +93,20 @@ export default function RequirementWizard(props: RequirementWizardProps) {
                 progress: props.generationProgress
               }}
               onNext={props.onNextStep}
+              hasPlan={!!(props.intent || props.design || props.tasks)}
             />
           </Show>
+
+
+
+
+
+
+
+
+
+
+
 
           <Show when={props.step === 2}>
             <StepRepository
@@ -97,20 +116,32 @@ export default function RequirementWizard(props: RequirementWizardProps) {
               onBack={props.onPrevStep}
               onNext={props.onNextStep}
               onGenerate={props.onCreateDevelopmentPlan || props.onGeneratePlan}
+              hasPlan={!!(props.intent || props.design || props.tasks)}
             />
           </Show>
 
+
+
+
+
+
+
+
+
+
           <Show when={props.step === 3}>
             <StepGeneration
-              progress={props.generationProgress}
+              progress={props.autoPlanProgress ?? props.generationProgress}
               isLoading={props.isLoading}
               error={props.error}
               selectedRepos={props.selectedRepos}
               intent={props.intent}
               design={props.design}
               tasks={props.tasks}
-              onGenerate={props.onGeneratePlan}
+              onGenerate={props.onCreateDevelopmentPlan || props.onGeneratePlan}
               onBack={props.onPrevStep}
+              onSyncToTFS={props.onSyncToTFS}
+              syncStatus={props.syncStatus}
             />
           </Show>
         </div>
@@ -134,9 +165,9 @@ function getStepTitle(step: number): string {
 }
 
 // Step Indicator Components
-function StepDot(props: { step: number; current: number; label: string }) {
+function StepDot(props: { step: number; current: number; label: string; completed?: boolean }) {
   const isActive = props.step === props.current;
-  const isCompleted = props.step < props.current;
+  const isCompleted = props.completed ?? props.step < props.current;
 
   return (
     <div class="flex flex-col items-center gap-1">

@@ -69,6 +69,8 @@ export type TaskCenterViewProps = {
   lastUpdatedAt: number | null;
   syncTasks: (options?: { force?: boolean }) => void;
   startAutomation: (item: TaskCenterItem) => void;
+  // Navigation
+  setView?: (view: "dashboard" | "session", sessionId?: string) => void;
   // Task execution props
   selectedItem?: TaskCenterItem | null;
   tasks?: ParsedTask[];
@@ -87,10 +89,14 @@ export type TaskCenterViewProps = {
     nextStep: () => void;
     prevStep: () => void;
     analyzeRequirement: (workItemId: number) => Promise<void>;
+    openPlanViewer?: (item: TaskCenterItem) => Promise<boolean>;
     toggleRepo: (repo: RepositoryMatch) => void;
     generatePlan: (item: TaskCenterItem) => Promise<void>;
     createDevelopmentPlan: (item: TaskCenterItem) => Promise<void>;
+    syncAllToTFS?: (item: TaskCenterItem) => Promise<boolean>;
   };
+  // TFS Sync props
+  getTfsSyncStatus?: (tfsId: number) => { analysisSynced: boolean; planSynced: boolean; isSyncing: boolean; error?: string; };
   // Dev/Test props
   clearAutomationState?: () => void;
 };
@@ -325,16 +331,21 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
   createEffect(() => {
     if (!props.clientConnected) return;
     if (typeof window === "undefined") return;
-    const interval = window.setInterval(() => props.syncTasks(), 60_000);
+    const interval = window.setInterval(() => props.syncTasks(), 300_000);
     onCleanup(() => window.clearInterval(interval));
   });
 
-  const handleStartAutomation = async (item: TaskCenterItem) => {
+  const handleStartAutomation = async (item: TaskCenterItem, preferView = false) => {
     currentWizardItem = item; // Store the item for use in wizard
     setSelectedItem(item);
-    
+
     // Use wizard if available
     if (props.wizardActions) {
+      if (preferView && props.wizardActions.openPlanViewer) {
+        const opened = await props.wizardActions.openPlanViewer(item);
+        if (opened) return;
+      }
+
       props.wizardActions.open();
       await props.wizardActions.analyzeRequirement(item.tfsId);
     } else {
@@ -371,46 +382,63 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
   };
 
   return (
-    <section class="space-y-4">
-      <div class="-mt-3 rounded-3xl border border-dls-border bg-dls-surface px-4 py-2 shadow-sm">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p class="text-xs text-dls-secondary">
-              {translate("task_center.sync_hint")}
-            </p>
-          </div>
-          <div class="flex items-center gap-2">
-            <Button
-              variant="outline"
-              class="h-8 px-3 text-[11px] text-red-600 border-red-200 hover:bg-red-50"
-              onClick={handleClearAutomation}
-              title="清空进行中的数据（测试用）"
-            >
-              <Trash2 size={14} />
-              清除
-            </Button>
-            <Button
-              variant="outline"
-              class="h-8 px-3 text-[11px]"
-              disabled={props.syncing || !props.clientConnected}
-              onClick={() => props.syncTasks({ force: true })}
-            >
-              {props.syncing ? <Loader2 size={14} class="animate-spin" /> : <RefreshCw size={14} />}
-              {props.syncing ? translate("task_center.syncing") : translate("task_center.refresh")}
-              {" · "}
-              {translate("task_center.last_sync").replace("{time}", lastUpdatedLabel())}
-            </Button>
-          </div>
+    <section class="h-screen flex flex-col">
+      {/* 任务中心顶部导航 - 紧凑设计 */}
+      <div class="flex items-center justify-between px-6 py-2 border-b border-dls-border bg-dls-surface mx-6 rounded-t-2xl">
+        <div class="flex items-center gap-3">
+          <h1 class="text-lg font-semibold text-dls-text">任务中心</h1>
+          <span class="text-xs text-dls-secondary">TFS 需求任务管理</span>
         </div>
+        <Button
+          variant="outline"
+          class="h-8 px-4 text-xs"
+          onClick={() => props.setView?.('dashboard')}
+        >
+          返回 Dashboard
+        </Button>
       </div>
 
-      <Show when={props.error}>
-        <div class="rounded-2xl border border-red-7/40 bg-red-3/60 px-5 py-4 text-sm text-red-11">
-          {props.error}
-        </div>
-      </Show>
 
-      {/* Task Execution Panel Modal */}
+      <div class="flex-1 overflow-hidden px-6 pt-2 pb-4 flex flex-col">
+        <div class="flex flex-col flex-1 min-h-0">
+        {/* 同步状态卡片 */}
+        <div class="rounded-xl border border-dls-border bg-dls-surface px-4 py-2 shadow-sm">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p class="text-xs text-dls-secondary">
+                {translate("task_center.sync_hint")}
+              </p>
+            </div>
+            <div class="flex items-center gap-2">
+              <Button
+                variant="outline"
+                class="h-8 px-3 text-[11px] text-red-600 border-red-200 hover:bg-red-50"
+                onClick={handleClearAutomation}
+                title="清空进行中的数据（测试用）"
+              >
+                <Trash2 size={14} />
+                清除
+              </Button>
+              <Button
+                variant="outline"
+                class="h-8 px-3 text-[11px]"
+                disabled={props.syncing || !props.clientConnected}
+                onClick={() => props.syncTasks({ force: true })}
+              >
+                {props.syncing ? <Loader2 size={14} class="animate-spin" /> : <RefreshCw size={14} />}
+                {props.syncing ? translate("task_center.syncing") : translate("task_center.refresh")}
+                {" · "}
+                {translate("task_center.last_sync").replace("{time}", lastUpdatedLabel())}
+              </Button>
+            </div>
+          </div>
+        </div>
+        <Show when={props.error}>
+          <div class="rounded-2xl border border-red-7/40 bg-red-3/60 px-5 py-4 text-sm text-red-11">
+            {props.error}
+          </div>
+        </Show>
+
       <Show when={showTaskPanel() && selectedItem()}>
         <TaskExecutionPanel
           item={selectedItem()!}
@@ -446,10 +474,12 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
           onToggleRepo={(repo) => props.wizardActions?.toggleRepo(repo)}
           onGeneratePlan={() => currentWizardItem && props.wizardActions?.generatePlan(currentWizardItem)}
           onCreateDevelopmentPlan={() => currentWizardItem && props.wizardActions?.createDevelopmentPlan(currentWizardItem)}
+          onSyncToTFS={currentWizardItem ? () => props.wizardActions?.syncAllToTFS?.(currentWizardItem!) ?? Promise.resolve(false) : undefined}
+          syncStatus={currentWizardItem ? props.getTfsSyncStatus?.((currentWizardItem as TaskCenterItem).tfsId) : undefined}
         />
       </Show>
 
-      <div class="flex gap-4 overflow-x-auto pb-4 h-[calc(100vh-180px)] md:h-[calc(100vh-220px)]">
+      <div class="flex gap-4 overflow-x-auto pb-4 mt-3 flex-1 min-h-0">
         <For each={STATUS_ORDER}>
           {(status) => {
             const items = () => props.itemsByStatus[status] ?? [];
@@ -477,7 +507,12 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                     }
                   >
                     <For each={items()}>
-                      {(item) => (
+                      {(item) => {
+                        const syncStatus = props.getTfsSyncStatus?.(item.tfsId);
+                        const hasAnalysis = !!syncStatus?.analysisSynced;
+                        const hasPlan = !!syncStatus?.planSynced;
+
+                        return (
                         <div class="rounded-2xl border border-dls-border bg-dls-surface px-4 py-4 shadow-sm">
                           <div class="flex items-start justify-between gap-3">
                             <div class="min-w-0">
@@ -553,14 +588,33 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                           {/* Action buttons based on status */}
                           <Show when={item.status === "todo"}>
                             <div class="mt-4">
-                              <Button
-                                variant="primary"
-                                class="h-8 px-3 text-xs"
-                                onClick={() => handleStartAutomation(item)}
+                              <Show
+                                when={hasPlan}
+                                fallback={
+                                  <Button
+                                    variant="primary"
+                                    class="h-8 px-3 text-xs"
+                                    onClick={() => handleStartAutomation(item)}
+                                  >
+                                    <Play size={12} />
+                                    {translate("task_center.generate_plan")}
+                                    <Show when={hasAnalysis}>
+                                      <span class="ml-2 rounded-full bg-emerald-3 px-2 py-0.5 text-[10px] font-semibold text-emerald-11">
+                                        {translate("task_center.analysis_synced")}
+                                      </span>
+                                    </Show>
+                                  </Button>
+                                }
                               >
-                                <Play size={12} />
-                                {translate("task_center.generate_plan")}
-                              </Button>
+                                <Button
+                                  variant="outline"
+                                  class="h-8 px-3 text-xs"
+                                  onClick={() => handleStartAutomation(item, true)}
+                                >
+                                  <ExternalLink size={12} />
+                                  {translate("task_center.view_plan")}
+                                </Button>
+                              </Show>
                             </div>
                           </Show>
 
@@ -569,7 +623,7 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                               <Button
                                 variant="outline"
                                 class="h-8 px-3 text-xs"
-                                onClick={() => handleStartAutomation(item)}
+                                onClick={() => handleStartAutomation(item, true)}
                               >
                                 <ExternalLink size={12} />
                                 {translate("task_center.view_plan")}
@@ -582,7 +636,7 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                               <Button
                                 variant="outline"
                                 class="h-8 px-3 text-xs"
-                                onClick={() => handleStartAutomation(item)}
+                                onClick={() => handleStartAutomation(item, true)}
                               >
                                 <ExternalLink size={12} />
                                 {translate("task_center.view_archive")}
@@ -590,7 +644,8 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                             </div>
                           </Show>
                         </div>
-                      )}
+                      );
+                      }}
                     </For>
                   </Show>
                 </div>
@@ -599,6 +654,9 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
           }}
         </For>
       </div>
+      </div>
+      </div>
     </section>
+
   );
 }

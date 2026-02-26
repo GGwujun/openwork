@@ -12,6 +12,7 @@ import {
   X,
 } from "lucide-solid";
 import type { RepositoryMatch } from "../../../types/requirement-analyzer";
+import { Cloud, Check, Loader2 as Loader2Icon } from "lucide-solid";
 import Button from "../../components/button";
 
 interface StepGenerationProps {
@@ -24,6 +25,13 @@ interface StepGenerationProps {
   tasks?: string;
   onGenerate: () => void;
   onBack: () => void;
+  onSyncToTFS?: () => Promise<boolean>;
+  syncStatus?: {
+    analysisSynced: boolean;
+    planSynced: boolean;
+    isSyncing: boolean;
+    error?: string;
+  };
 }
 
 export default function StepGeneration(props: StepGenerationProps) {
@@ -227,6 +235,103 @@ export default function StepGeneration(props: StepGenerationProps) {
               />
             </div>
           </div>
+          {/* Sync to TFS Card Button */}
+          <Show when={props.onSyncToTFS}>
+
+            <div 
+              class={`mb-6 p-4 rounded-xl border-2 transition-all cursor-pointer ${
+                props.syncStatus?.isSyncing
+                  ? 'bg-blue-50 border-blue-300 cursor-wait'
+                  : props.syncStatus?.analysisSynced && props.syncStatus?.planSynced
+                  ? 'bg-emerald-50 border-emerald-300 cursor-default'
+                  : 'bg-white border-slate-200 hover:border-blue-300 hover:bg-blue-50/50'
+              }`}
+              onClick={async () => {
+                console.log('[StepGeneration] Sync button clicked', {
+                  isSyncing: props.syncStatus?.isSyncing,
+                  analysisSynced: props.syncStatus?.analysisSynced,
+                  planSynced: props.syncStatus?.planSynced,
+                  hasOnSyncToTFS: !!props.onSyncToTFS
+                });
+                if (!props.syncStatus?.isSyncing && !(props.syncStatus?.analysisSynced && props.syncStatus?.planSynced)) {
+                  try {
+                    console.log('[StepGeneration] Calling onSyncToTFS...');
+                    const result = await props.onSyncToTFS?.();
+                    console.log('[StepGeneration] onSyncToTFS result:', result);
+                  } catch (error) {
+                    console.error('[StepGeneration] Sync to TFS failed:', error);
+                    // 错误已经在 task-center.ts 中设置到 syncStatus.error
+                  }
+                } else {
+                  console.log('[StepGeneration] Sync skipped - already syncing or already synced');
+                }
+              }}>
+
+            <div class="flex items-center justify-between">
+
+                <div class="flex items-center gap-3">
+                  <div class={`p-2 rounded-lg ${
+                    props.syncStatus?.analysisSynced && props.syncStatus?.planSynced
+                      ? 'bg-emerald-100'
+                      : props.syncStatus?.isSyncing
+                      ? 'bg-blue-100'
+                      : 'bg-blue-100'
+                  }`}>
+                    <Show
+                      when={props.syncStatus?.analysisSynced && props.syncStatus?.planSynced}
+                      fallback={
+                        <Show
+                          when={props.syncStatus?.isSyncing}
+                          fallback={<Cloud size={20} class="text-blue-600" />}
+                        >
+                          <Loader2Icon size={20} class="text-blue-600 animate-spin" />
+                        </Show>
+                      }
+                    >
+                      <Check size={20} class="text-emerald-600" />
+                    </Show>
+                  </div>
+                  <div>
+                    <div class="text-sm font-medium text-dls-text">
+                      {props.syncStatus?.analysisSynced && props.syncStatus?.planSynced
+                        ? '已同步到 TFS'
+                        : props.syncStatus?.isSyncing
+                        ? '正在同步...'
+                        : '同步到 TFS'}
+                    </div>
+                    <p class="text-xs text-dls-secondary">
+                      {props.syncStatus?.error
+                        ? <span class="text-red-500">错误: {props.syncStatus.error}</span>
+                        : props.syncStatus?.analysisSynced && props.syncStatus?.planSynced
+                        ? '分析结果和开发计划已同步到 TFS 子任务'
+                        : props.syncStatus?.analysisSynced
+                        ? '分析结果已同步，点击同步开发计划'
+                        : props.syncStatus?.planSynced
+                        ? '开发计划已同步，点击同步分析结果'
+                        : '点击将分析结果和开发计划同步到 TFS'}
+                    </p>
+                  </div>
+                </div>
+                
+                {/* Sync Status Badge */}
+                <Show when={props.syncStatus?.analysisSynced || props.syncStatus?.planSynced}>
+                  <div class="flex flex-col gap-1 items-end">
+                    <Show when={props.syncStatus?.analysisSynced}>
+                      <span class="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
+                        分析 ✓
+                      </span>
+                    </Show>
+                    <Show when={props.syncStatus?.planSynced}>
+                      <span class="text-[10px] px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">
+                        计划 ✓
+                      </span>
+                    </Show>
+                  </div>
+                </Show>
+              </div>
+            </div>
+          </Show>
+          
 
           {/* Action Buttons */}
           <div class="flex justify-center gap-3">

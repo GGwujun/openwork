@@ -27,6 +27,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ClipboardList,
   Clock3,
   Cpu,
   HardDrive,
@@ -41,9 +42,9 @@ import {
   Plus,
   RotateCcw,
   Settings,
-  Square,
   Shield,
   SlidersHorizontal,
+  Square,
   Zap,
 } from "lucide-solid";
 
@@ -1881,6 +1882,15 @@ export default function SessionView(props: SessionViewProps) {
             <h1 class="text-sm font-semibold text-dls-text">
               {selectedSessionTitle() || "New task"}
             </h1>
+            {/* 任务中心入口 */}
+            <button
+              type="button"
+              onClick={() => props.setView('task-center')}
+              class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ml-2 bg-blue-9 text-white border border-blue-7 shadow-sm hover:bg-blue-10"
+            >
+              <ClipboardList size={16} />
+              <span>任务中心</span>
+            </button>
             <Show when={props.developerMode}>
               <span class="text-xs text-dls-secondary">{props.headerStatus}</span>
             </Show>
@@ -2325,21 +2335,6 @@ export default function SessionView(props: SessionViewProps) {
               >
                 <History size={18} />
                 {translate("dashboard.automations")}
-              </button>
-              <button
-                type="button"
-                class={`w-full h-10 flex items-center gap-3 px-3 rounded-lg text-sm font-medium transition-colors ${
-                  showRightSidebarSelection() && props.tab === "task-center"
-                    ? "bg-dls-active text-dls-text"
-                    : "text-dls-secondary hover:text-dls-text hover:bg-dls-hover"
-                }`}
-                onClick={() => {
-                  props.setTab("task-center");
-                  props.setView("dashboard");
-                }}
-              >
-                <KanbanSquare size={18} />
-                {translate("dashboard.task_center")}
               </button>
               <button
                 type="button"

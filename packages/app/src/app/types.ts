@@ -125,7 +125,7 @@ export type OpencodeEvent = {
   properties?: unknown;
 };
 
-export type View = "onboarding" | "dashboard" | "session" | "proto";
+export type View = "onboarding" | "dashboard" | "session" | "task-center" | "proto";
 
 export type StartupPreference = "local" | "server";
 
@@ -140,8 +140,7 @@ export type DashboardTab =
   | "mcp"
   | "identities"
   | "config"
-  | "settings"
-  | "task-center";
+  | "settings";
 
 export type TaskCenterStatus = "todo" | "progress" | "done" | "archived" | "failed";
 

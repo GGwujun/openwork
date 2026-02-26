@@ -42,6 +42,15 @@ import {
 } from './task-center-generate-plan';
 import { fsReadFile } from '../lib/tauri';
 
+// TFS 子任务同步
+import {
+  createAnalysisTask,
+  createPlanTask,
+  checkSyncStatus,
+  type TfsSyncStatus,
+  type SyncOptions,
+} from '../lib/sync-task-to-tfs';
+
 // 删除未使用的导入
 // import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs';
 
@@ -615,6 +624,22 @@ export function createTaskCenterStore(options: {
     automationStore[1](updater);
   };
 
+  // TFS Sync status store - persists TFS subtask sync status
+  // Using Record to track sync status per TFS work item
+  type TfsSyncStatusMap = Record<number, TfsSyncStatus>;
+  
+  const tfsSyncStore = (() => {
+    const initialState: TfsSyncStatusMap = {};
+    const store = createStore<TfsSyncStatusMap>(initialState);
+    return persisted(Persist.global("task-center.tfs-sync"), store);
+  })();
+  const tfsSyncState = tfsSyncStore[0];
+  const setTfsSyncState = (tfsId: number, status: TfsSyncStatus) => {
+    const updater: Partial<TfsSyncStatusMap> = {};
+    updater[tfsId] = status;
+    tfsSyncStore[1](updater);
+  };
+
   // 清空所有 automation 状态（重置为初始状态）并刷新 TFS 数据
   const clearAutomationState = async () => {
     automationStore[1]({});
@@ -1001,6 +1026,17 @@ export function createTaskCenterStore(options: {
       // Merge with automation state to preserve items not in TFS query
       const mergedItems = mergeTfsItemsWithAutomation(tfsItems, automationState ?? {});
       setItems(mergedItems);
+
+      // Refresh TFS subtask sync status (non-blocking)
+      const needsSyncCheck = mergedItems.filter((item) => {
+        const current = tfsSyncState[item.tfsId];
+        if (!current) return true;
+        return current.analysisSynced || current.planSynced;
+      });
+      if (needsSyncCheck.length > 0) {
+        void Promise.allSettled(needsSyncCheck.map(checkAndRefreshTfsSyncStatus));
+      }
+
       setLastUpdatedAt(Date.now());
       setStatus("idle");
     } catch (error) {
@@ -1072,6 +1108,62 @@ export function createTaskCenterStore(options: {
     
     nextStep: () => setWizard('step', s => Math.min(s + 1, 3) as 1 | 2 | 3),
     prevStep: () => setWizard('step', s => Math.max(s - 1, 1) as 1 | 2 | 3),
+
+    // Open wizard directly in plan view if documents exist
+    async openPlanViewer(item: TaskCenterItem): Promise<boolean> {
+      const directory = options.activeWorkspaceRoot().trim();
+      if (!directory) {
+        setWizard({ isOpen: true, step: 3, isLoading: false, error: '未选择工作目录' });
+        return false;
+      }
+
+      setWizard({
+        isOpen: true,
+        step: 3,
+        isLoading: true,
+        error: null,
+        generationProgress: 0,
+        autoPlanProgress: 0,
+      });
+
+      const trackPath = `forge/tracks/tfs-${item.tfsId}`;
+      const possibleFiles = [
+        `${trackPath}/intent.md`,
+        `${trackPath}/design.md`,
+        `${trackPath}/tasks.md`,
+      ];
+
+      const fileResult = await readGeneratedFiles(possibleFiles, directory);
+      const hasContent = !!(fileResult.intent || fileResult.design || fileResult.tasks);
+
+      if (!hasContent) {
+        setWizard('isLoading', false);
+        return false;
+      }
+
+      const [analysisResult, reposResult] = await Promise.all([
+        readAnalysisResult(item.tfsId, directory),
+        readReposResult(item.tfsId, directory),
+      ]);
+
+      setWizard({
+        isOpen: true,
+        step: 3,
+        isLoading: false,
+        error: null,
+        generationProgress: 100,
+        autoPlanStep: 'completed',
+        autoPlanProgress: 100,
+        requirement: analysisResult?.requirement ?? null,
+        detection: reposResult?.detection ?? null,
+        selectedRepos: reposResult?.selectedRepos ?? [],
+        intent: fileResult.intent,
+        design: fileResult.design,
+        tasks: fileResult.tasks,
+      });
+
+      return true;
+    },
     
     // Step 1: Analyze requirement
     async analyzeRequirement(workItemId: number) {
@@ -1533,10 +1625,269 @@ export function createTaskCenterStore(options: {
         console.error('Create development plan error:', err);
       } finally {
         setWizard('isLoading', false);
+        
       }
     },
 
+    // TFS Sync
+    syncAllToTFS,
+
   };
+
+  // ========== TFS 子任务同步函数 ==========
+
+  /**
+   * 同步分析结果到 TFS（创建子任务）
+   * @param item TaskCenterItem
+   * @param force 是否强制更新
+   */
+  async function syncAnalysisToTFS(item: TaskCenterItem, force = false): Promise<boolean> {
+    console.log('[TaskCenter] syncAnalysisToTFS called:', { tfsId: item.tfsId, force });
+    try {
+      const tfsConfig = getTfsConfig();
+      console.log('[TaskCenter] TFS Config:', tfsConfig ? 'exists' : 'null');
+      if (!tfsConfig) {
+        console.error('[TaskCenter] TFS not configured');
+        return false;
+      }
+
+      // 检查当前 wizard 中是否有分析结果
+      const requirement = wizard.requirement;
+      const detection = wizard.detection;
+      console.log('[TaskCenter] Wizard data:', { 
+        hasRequirement: !!requirement, 
+        hasDetection: !!detection 
+      });
+      
+      if (!requirement || !detection) {
+        console.error('[TaskCenter] No analysis result available');
+        return false;
+      }
+
+      console.log('[TaskCenter] Creating TFS client...');
+      const client = new TFSClient(tfsConfig);
+      console.log('[TaskCenter] Calling createAnalysisTask...');
+      const result = await createAnalysisTask(
+        client,
+        item.tfsId,
+        item.title,
+        requirement,
+        detection,
+        {
+          workspaceRoot: options.activeWorkspaceRoot(),
+          project: item.project || 'WiNEX-General',
+          force,
+          assignedTo: item.assignedTo,
+        }
+      );
+      console.log('[TaskCenter] createAnalysisTask result:', result);
+
+      if (result.success && result.taskId) {
+        console.log('[TaskCenter] Setting sync state for analysis...');
+        setTfsSyncState(item.tfsId, {
+          analysisSynced: true,
+          analysisTaskId: result.taskId,
+          planSynced: tfsSyncState[item.tfsId]?.planSynced || false,
+          planTaskId: tfsSyncState[item.tfsId]?.planTaskId,
+          lastSyncedAt: new Date().toISOString(),
+        });
+        console.log(`[TaskCenter] Analysis synced to TFS: #${result.taskId}`);
+        return true;
+      }
+
+      console.log('[TaskCenter] Analysis sync failed or returned no taskId');
+      return false;
+    } catch (error) {
+      console.error('[TaskCenter] Failed to sync analysis to TFS:', error);
+      return false;
+    }
+  }
+
+
+  /**
+   * 同步开发计划到 TFS（创建子任务）
+   * @param item TaskCenterItem
+   * @param force 是否强制更新
+   */
+  async function syncPlanToTFS(item: TaskCenterItem, force = false): Promise<boolean> {
+    console.log('[TaskCenter] syncPlanToTFS called:', { tfsId: item.tfsId, force });
+    try {
+      const tfsConfig = getTfsConfig();
+      console.log('[TaskCenter] TFS Config for plan:', tfsConfig ? 'exists' : 'null');
+      if (!tfsConfig) {
+        console.error('[TaskCenter] TFS not configured');
+        return false;
+      }
+
+      const requirement = wizard.requirement;
+      const selectedRepos = wizard.selectedRepos;
+      console.log('[TaskCenter] Wizard data for plan:', { 
+        hasRequirement: !!requirement, 
+        selectedReposCount: selectedRepos?.length || 0 
+      });
+      
+      if (!requirement || selectedRepos.length === 0) {
+        console.error('[TaskCenter] No plan data available');
+        return false;
+      }
+
+      console.log('[TaskCenter] Creating TFS client for plan...');
+      const client = new TFSClient(tfsConfig);
+      console.log('[TaskCenter] Calling createPlanTask...');
+      const result = await createPlanTask(
+        client,
+        item.tfsId,
+        item.title,
+        item.tfsId,
+        requirement,
+        selectedRepos,
+        {
+          workspaceRoot: options.activeWorkspaceRoot(),
+          project: item.project || 'WiNEX-General',
+          force,
+          assignedTo: item.assignedTo,
+        },
+        {
+          intent: wizard.intent,
+          design: wizard.design,
+          tasks: wizard.tasks,
+        }
+      );
+      console.log('[TaskCenter] createPlanTask result:', result);
+
+      if (result.success && result.taskId) {
+        console.log('[TaskCenter] Setting sync state for plan...');
+        setTfsSyncState(item.tfsId, {
+          ...tfsSyncState[item.tfsId],
+          planSynced: true,
+          planTaskId: result.taskId,
+          lastSyncedAt: new Date().toISOString(),
+        });
+        console.log(`[TaskCenter] Plan synced to TFS: #${result.taskId}`);
+        return true;
+      }
+
+      console.log('[TaskCenter] Plan sync failed or returned no taskId');
+      return false;
+    } catch (error) {
+      console.error('[TaskCenter] Failed to sync plan to TFS:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 同步所有内容到 TFS
+   * @param item TaskCenterItem
+   * @param force 是否强制更新
+   */
+  async function syncAllToTFS(item: TaskCenterItem, force = false): Promise<boolean> {
+    console.log('[TaskCenter] syncAllToTFS called:', { tfsId: item.tfsId, title: item.title, force });
+    try {
+      console.log(`[TaskCenter] Starting TFS sync for item #${item.tfsId}`);
+      
+      // 设置同步中状态
+      console.log('[TaskCenter] Setting isSyncing state...');
+      setTfsSyncState(item.tfsId, {
+        ...tfsSyncState[item.tfsId],
+        isSyncing: true,
+        error: undefined,
+      });
+      
+      // 同步分析结果
+      console.log('[TaskCenter] Calling syncAnalysisToTFS...');
+      const analysisSuccess = await syncAnalysisToTFS(item, force);
+      console.log('[TaskCenter] syncAnalysisToTFS result:', analysisSuccess);
+      
+      // 同步开发计划
+      console.log('[TaskCenter] Calling syncPlanToTFS...');
+      const planSuccess = await syncPlanToTFS(item, force);
+      console.log('[TaskCenter] syncPlanToTFS result:', planSuccess);
+      
+      // 清除同步中状态
+      console.log('[TaskCenter] Clearing isSyncing state...');
+      setTfsSyncState(item.tfsId, {
+        ...tfsSyncState[item.tfsId],
+        isSyncing: false,
+      });
+      
+      const success = analysisSuccess || planSuccess;
+      console.log(`[TaskCenter] TFS sync final result:`, { analysisSuccess, planSuccess, success });
+      if (success) {
+        console.log(`[TaskCenter] TFS sync completed successfully for item #${item.tfsId}`);
+        void checkAndRefreshTfsSyncStatus(item);
+      } else {
+        // 设置错误信息帮助用户理解失败原因
+        const tfsConfig = getTfsConfig();
+        if (!tfsConfig) {
+          setTfsSyncState(item.tfsId, {
+            ...tfsSyncState[item.tfsId],
+            isSyncing: false,
+            error: 'TFS 未配置，请在设置中配置 TFS',
+          });
+        } else if (!wizard.requirement) {
+          setTfsSyncState(item.tfsId, {
+            ...tfsSyncState[item.tfsId],
+            isSyncing: false,
+            error: '没有需求分析数据，请先完成需求分析',
+          });
+        } else {
+          setTfsSyncState(item.tfsId, {
+            ...tfsSyncState[item.tfsId],
+            isSyncing: false,
+            error: '同步失败，请检查 TFS 配置和网络连接',
+          });
+        }
+      }
+      
+      return success;
+    } catch (error) {
+      console.error('[TaskCenter] Failed to sync to TFS:', error);
+      // 设置错误状态
+      setTfsSyncState(item.tfsId, {
+        ...tfsSyncState[item.tfsId],
+        isSyncing: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
+  /**
+   * 获取 TFS 同步状态
+   * @param tfsId TFS 工作项 ID
+   */
+  function getTfsSyncStatus(tfsId: number): TfsSyncStatus {
+    return tfsSyncState[tfsId] || {
+      analysisSynced: false,
+      planSynced: false,
+      isSyncing: false,
+    };
+  }
+
+  /**
+   * 检查并刷新 TFS 同步状态
+   * @param item TaskCenterItem
+   */
+  async function checkAndRefreshTfsSyncStatus(item: TaskCenterItem): Promise<void> {
+    try {
+      const tfsConfig = getTfsConfig();
+      if (!tfsConfig) return;
+
+      const client = new TFSClient(tfsConfig);
+      const status = await checkSyncStatus(client, item.tfsId, item.project);
+      
+      const current = tfsSyncState[item.tfsId];
+      setTfsSyncState(item.tfsId, {
+        ...current,
+        ...status,
+        isSyncing: current?.isSyncing ?? false,
+      });
+    } catch (error) {
+      console.warn('[TaskCenter] Failed to check TFS sync status:', error);
+    }
+  }
+
+
 
   // Task execution functions
   const selectItem = (item: TaskCenterItem | null) => {
@@ -1878,5 +2229,12 @@ EOF`,
     resumeEmbeddedAutomation,
     cancelEmbeddedAutomation,
     initializeAutomationEngine,
+    // TFS 子任务同步
+    tfsSyncState,
+    getTfsSyncStatus,
+    syncAnalysisToTFS,
+    syncPlanToTFS,
+    syncAllToTFS,
+    checkAndRefreshTfsSyncStatus,
   };
 }

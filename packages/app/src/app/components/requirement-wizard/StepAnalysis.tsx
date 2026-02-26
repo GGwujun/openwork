@@ -29,6 +29,7 @@ interface StepAnalysisProps {
     progress: number;
   } | null;
   onNext: () => void;
+  hasPlan?: boolean;
 }
 
 export default function StepAnalysis(props: StepAnalysisProps) {
@@ -183,7 +184,7 @@ export default function StepAnalysis(props: StepAnalysisProps) {
           onClick={props.onNext}
           disabled={props.isLoading || !props.requirement}
         >
-          下一步：识别仓库
+          {props.hasPlan ? '查看计划' : '下一步：识别仓库'}
         </Button>
       </div>
     </div>

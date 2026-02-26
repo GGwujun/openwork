@@ -36,6 +36,7 @@ import ReloadWorkspaceToast from "./components/reload-workspace-toast";
 import OnboardingView from "./pages/onboarding";
 import DashboardView from "./pages/dashboard";
 import SessionView from "./pages/session";
+import TaskCenterView from "./pages/task-center";
 import ProtoWorkspacesView from "./pages/proto-workspaces";
 import ProtoV1UxView from "./pages/proto-v1-ux";
 import { createClient, unwrap, waitForHealthy, type OpencodeAuth } from "./lib/opencode";
@@ -177,6 +178,7 @@ export default function App() {
     const path = location.pathname.toLowerCase();
     if (path.startsWith("/onboarding")) return "onboarding";
     if (path.startsWith("/session")) return "session";
+    if (path.startsWith("/task-center")) return "task-center";
     if (path.startsWith("/proto")) return "proto";
     return "dashboard";
   });
@@ -226,6 +228,10 @@ export default function App() {
         return;
       }
       navigate("/session");
+      return;
+    }
+    if (next === "task-center") {
+      navigate("/task-center");
       return;
     }
     goToDashboard(tab());
@@ -3746,7 +3752,7 @@ export default function App() {
 
   const taskCenterStore = createTaskCenterStore({
     client,
-    getSelectedModel: selectedSessionModel,
+    getSelectedModel: () => defaultModel(),
     activeWorkspaceRoot: () => workspaceStore.activeWorkspaceRoot().trim(),
     createSessionAndOpen,
     setPrompt,
@@ -4817,7 +4823,30 @@ export default function App() {
     renameSession: renameSessionTitle,
     error: error(),
   });
-
+  const taskCenterProps = () => ({
+    clientConnected: Boolean(client()),
+    itemsByStatus: taskCenterStore.itemsByStatus(),
+    status: taskCenterStore.status(),
+    error: taskCenterStore.error(),
+    syncing: taskCenterStore.syncing(),
+    lastUpdatedAt: taskCenterStore.lastUpdatedAt(),
+    syncTasks: taskCenterStore.syncTasks,
+    startAutomation: taskCenterStore.startAutomation,
+    selectedItem: taskCenterStore.selectedItem(),
+    tasks: taskCenterStore.tasks(),
+    currentTaskIndex: taskCenterStore.currentTaskIndex(),
+    executing: taskCenterStore.executing(),
+    showTaskPanel: taskCenterStore.showTaskPanel(),
+    setShowTaskPanel: taskCenterStore.setShowTaskPanel,
+    onSelectItem: taskCenterStore.selectItem,
+    onExecuteTask: taskCenterStore.executeTaskStep,
+    onCompleteTask: taskCenterStore.completeTaskStep,
+    wizard: taskCenterStore.wizard,
+    wizardActions: taskCenterStore.wizardActions,
+    clearAutomationState: taskCenterStore.clearAutomationState,
+    getTfsSyncStatus: taskCenterStore.getTfsSyncStatus,
+    setView,
+  });
   const initialRoute = () => {
     if (typeof window === "undefined") return "/session";
     return "/session";
@@ -4901,6 +4930,11 @@ export default function App() {
       return;
     }
 
+    if (path.startsWith("/task-center")) {
+      // Task center is a valid full-screen page, do not redirect
+      return;
+    }
+
     const fallback = activeSessionId();
     if (fallback) {
       goToSession(fallback, { replace: true });
@@ -4927,6 +4961,9 @@ export default function App() {
         </Match>
         <Match when={currentView() === "session"}>
           <SessionView {...sessionProps()} />
+        </Match>
+        <Match when={currentView() === "task-center"}>
+          <TaskCenterView {...taskCenterProps()} />
         </Match>
         <Match when={true}>
           <DashboardView {...dashboardProps()} />

@@ -160,6 +160,7 @@ export default {
   "task_center.no_tasks_in": "No tasks in {status}.",
   "task_center.open_in_tfs": "Open in TFS",
   "task_center.generate_plan": "Generate plan",
+  "task_center.analysis_synced": "Analysis synced",
   "task_center.view_plan": "View plan",
   "task_center.view_archive": "View archive",
 

@@ -23,6 +23,7 @@ interface StepRepositoryProps {
   onBack: () => void;
   onNext: () => void;
   onGenerate?: () => void;
+  hasPlan?: boolean;
 }
 
 export default function StepRepository(props: StepRepositoryProps) {
@@ -163,7 +164,7 @@ export default function StepRepository(props: StepRepositoryProps) {
           }}
           disabled={selectedCount() === 0}
         >
-          生成开发计划
+          {props.hasPlan ? '查看计划' : '生成开发计划'}
         </Button>
       </div>
     </div>

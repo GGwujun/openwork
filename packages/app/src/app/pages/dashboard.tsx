@@ -1,4 +1,5 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
+import { useNavigate } from "@solidjs/router";
 import type {
   DashboardTab,
   McpServerEntry,
@@ -168,6 +169,8 @@ export type DashboardViewProps = {
     analyzeRequirement: (workItemId: number) => Promise<void>;
     toggleRepo: (repo: RepositoryMatch) => void;
     generatePlan: (item: TaskCenterItem) => Promise<void>;
+    createDevelopmentPlan: (item: TaskCenterItem) => Promise<void>;
+    syncAllToTFS?: (item: TaskCenterItem) => Promise<boolean>;
   };
   refreshScheduledJobs: (options?: { force?: boolean }) => void;
   deleteScheduledJob: (name: string) => Promise<void> | void;
@@ -297,6 +300,7 @@ export type DashboardViewProps = {
 
 export default function DashboardView(props: DashboardViewProps) {
   const translate = (key: string) => t(key, currentLocale());
+  const navigate = useNavigate();
   const title = createMemo(() => {
     switch (props.tab) {
       case "scheduled":
@@ -313,8 +317,6 @@ export default function DashboardView(props: DashboardViewProps) {
         return translate("dashboard.config");
       case "settings":
         return translate("dashboard.settings");
-      case "task-center":
-        return translate("dashboard.task_center");
       default:
         return translate("dashboard.automations");
     }
@@ -1296,6 +1298,15 @@ export default function DashboardView(props: DashboardViewProps) {
               {props.activeWorkspaceDisplay.name}
             </div>
             <h1 class="text-lg font-medium">{title()}</h1>
+            {/* 任务中心入口 - 点击打开全屏任务中心 */}
+            <button
+              type="button"
+              onClick={() => navigate("/task-center")}
+              class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ml-2 bg-blue-9 text-white border border-blue-7 shadow-sm hover:bg-blue-10"
+            >
+              <ClipboardList size={16} />
+              <span>任务中心</span>
+            </button>
             <Show when={props.developerMode}>
               <span class="text-xs text-dls-secondary">{props.headerStatus}</span>
             </Show>
@@ -1624,7 +1635,7 @@ export default function DashboardView(props: DashboardViewProps) {
           mcpStatuses={props.mcpStatuses}
         />
         <nav class="md:hidden border-t border-dls-border bg-dls-surface">
-          <div class="mx-auto max-w-5xl px-4 py-3 grid grid-cols-7 gap-2">
+          <div class="mx-auto max-w-5xl px-4 py-3 grid grid-cols-6 gap-2">
             <button
               class={`flex flex-col items-center gap-1 text-xs ${
                 props.tab === "scheduled" ? "text-gray-12" : "text-gray-10"
@@ -1633,15 +1644,6 @@ export default function DashboardView(props: DashboardViewProps) {
             >
               <History size={18} />
               {translate("dashboard.automations")}
-            </button>
-            <button
-              class={`flex flex-col items-center gap-1 text-xs ${
-                props.tab === "task-center" ? "text-gray-12" : "text-gray-10"
-              }`}
-              onClick={() => props.setTab("task-center")}
-            >
-              <ClipboardList size={18} />
-              {translate("dashboard.task_center")}
             </button>
             <button
               class={`flex flex-col items-center gap-1 text-xs ${
@@ -1721,7 +1723,6 @@ export default function DashboardView(props: DashboardViewProps) {
         <Show when={rightSidebarTab() === "work"}>
           <div class="space-y-1 pt-3">
             {navItem("scheduled", "dashboard.automations", <History size={18} />)}
-            {navItem("task-center", "dashboard.task_center", <ClipboardList size={18} />)}
             {navItem("skills", "dashboard.skills", <Zap size={18} />)}
             {navItem("plugins", "dashboard.plugins", <Cpu size={18} />)}
             {navItem("mcp", "dashboard.mcps", <Box size={18} />)}

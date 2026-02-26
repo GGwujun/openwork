@@ -160,6 +160,7 @@ export default {
   "task_center.no_tasks_in": "{status} 暂无任务。",
   "task_center.open_in_tfs": "在 TFS 中打开",
   "task_center.generate_plan": "生成计划",
+  "task_center.analysis_synced": "已同步需求分析",
   "task_center.view_plan": "查看计划",
   "task_center.view_archive": "查看归档",
 
