@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "OpenWork",
+    "slug": "openwork",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "platforms": ["ios", "android"]
+  }
+}
