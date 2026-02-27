@@ -18,6 +18,13 @@ const statusMap: Record<string, ParsedTask["status"]> = {
   "❌": "failed",
 };
 
+const statusLabelMap: Record<string, ParsedTask["status"]> = {
+  "待执行": "pending",
+  "执行中": "in-progress",
+  "已完成": "completed",
+  "失败": "failed",
+};
+
 const reverseStatusMap: Record<ParsedTask["status"], string> = {
   pending: "⏳ 待执行",
   "in-progress": "🔄 执行中",
@@ -54,7 +61,7 @@ function parseTaskFormat(lines: string[]): ParsedTask[] {
     const line = lines[i];
 
     // Match Task header: ### Task X: Title
-    const taskMatch = line.match(/^### Task (\d+):\s*(.+)$/);
+    const taskMatch = line.match(/^### Task (\d+)(?::\s*(.+))?\s*$/);
     if (taskMatch) {
       // Save previous task if exists
       if (currentTask) {
@@ -63,9 +70,10 @@ function parseTaskFormat(lines: string[]): ParsedTask[] {
       }
 
       // Start new task
+      const title = taskMatch[2]?.trim() || `Task ${taskMatch[1]}`;
       currentTask = {
         index: parseInt(taskMatch[1]) - 1,
-        title: taskMatch[2],
+        title,
         status: "pending",
         description: "",
       };
@@ -74,9 +82,18 @@ function parseTaskFormat(lines: string[]): ParsedTask[] {
     }
 
     // Match status line: **状态**: ⏳ 待执行
-    const statusMatch = line.match(/\*\*状态\*\*:\s*([⏳🔄✅❌])\s*(.+)/);
+    const statusMatch = line.match(/^\*\*状态\*\*:\s*(.+)$/);
     if (statusMatch && currentTask) {
-      currentTask.status = statusMap[statusMatch[1]] || "pending";
+      const statusLine = statusMatch[1].trim();
+      const mapped =
+        (statusLine.includes("⏳") && "pending") ||
+        (statusLine.includes("🔄") && "in-progress") ||
+        (statusLine.includes("✅") && "completed") ||
+        (statusLine.includes("❌") && "failed") ||
+        Object.entries(statusLabelMap).find(([label]) => statusLine.includes(label))?.[1];
+      if (mapped) {
+        currentTask.status = mapped;
+      }
     }
 
     // Collect description lines (skip empty lines and metadata)
@@ -137,7 +154,7 @@ export function updateTaskStatus(
   let currentTaskIndex = -1;
 
   for (let i = 0; i < lines.length; i++) {
-    const taskMatch = lines[i].match(/^### Task (\d+):/);
+    const taskMatch = lines[i].match(/^### Task (\d+)(?::|\s*$)/);
     if (taskMatch) {
       currentTaskIndex = parseInt(taskMatch[1]) - 1;
     }

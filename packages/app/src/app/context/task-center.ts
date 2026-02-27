@@ -19,12 +19,17 @@ import {
 } from "../config/tfs";
 
 import { RequirementAnalyzer, createRequirementAnalyzer } from '../../api/requirement-analyzer';
-import type { 
-  ParsedRequirement, 
-  RepositoryMatch, 
+import type {
+  ParsedRequirement,
+  RepositoryMatch,
   DetectionResult,
-  PlanWizardState 
+  PlanWizardState,
+  TaskAutoAnalysisState,
+  AnalysisQueueStatus,
+  AnalysisResult,
+  AnalysisPriority,
 } from '../../types/requirement-analyzer';
+import { getAutoAnalysisConfig, subscribeAutoAnalysisConfig } from '../../types/config';
 
 // AI Generate Plan
 import { 
@@ -41,6 +46,9 @@ import {
   type PlanStatus,
 } from './task-center-generate-plan';
 import { fsReadFile } from '../lib/tauri';
+import { AnalysisCache, type CacheEntry, type AnalysisCacheData } from '../lib/analysis-cache';
+import { AnalysisQueue } from '../lib/analysis-queue';
+import { AutoAnalyzer } from '../lib/auto-analyzer';
 
 // TFS 子任务同步
 import {
@@ -90,13 +98,16 @@ export function mergeTfsItemsWithAutomation(
   for (const item of tfsItems) {
     const autoState = getAutomationState(automation, item.tfsId);
     if (autoState) {
-      // **TFS state has priority** - only merge stage/subStage from automation
-      // This ensures manual TFS state changes are reflected immediately
+      const shouldUseAutomationStatus = item.status === "todo" && autoState.status !== "todo";
+      const mergedStatus = shouldUseAutomationStatus ? autoState.status : item.status;
+      const mergedStage = mergedStatus === "progress" ? autoState.stage ?? item.stage : item.stage;
+      const mergedSubStage = mergedStatus === "progress" ? autoState.subStage : undefined;
+
       result.push({
         ...item,
-        // status: item.status (from TFS, don't override)
-        stage: item.status === "progress" ? autoState.stage : item.stage,
-        subStage: item.status === "progress" ? autoState.subStage : undefined,
+        status: mergedStatus,
+        stage: mergedStage,
+        subStage: mergedSubStage,
       });
     } else {
       // No automation state, use TFS item as-is
@@ -184,6 +195,34 @@ const readErrorMessage = (value: unknown): string | null => {
   if (typeof value === "string") return value;
   if (isRecord(value) && typeof value.message === "string") return value.message;
   return null;
+};
+
+const formatSyncError = (error: unknown): string => {
+  const message = readErrorMessage(error) ?? "Task sync failed.";
+  if (/CORS|被 CORS/i.test(message)) {
+    return "网络访问被 CORS 拦截，请使用桌面版或配置反向代理。";
+  }
+  if (/Failed to fetch|NetworkError|网络/i.test(message)) {
+    return "网络连接失败，请检查网络或 TFS 服务可用性。";
+  }
+  if (/429|rate limit|too many/i.test(message)) {
+    return "TFS 请求过于频繁，请稍后重试。";
+  }
+  return message;
+};
+
+const formatAutoAnalysisError = (error: unknown): string => {
+  const message = readErrorMessage(error) ?? "分析失败";
+  if (/not found|不存在|deleted/i.test(message)) {
+    return "工作项不存在或已删除";
+  }
+  if (/AI 分析结果格式错误|仓库识别结果格式错误|JSON/i.test(message)) {
+    return `AI 返回格式错误: ${message}`;
+  }
+  if (/OpenCode 客户端未连接/i.test(message)) {
+    return "OpenCode 未连接，无法进行 AI 分析。";
+  }
+  return message;
 };
 
 const extractOutputFromParts = (parts: unknown): string | null => {
@@ -610,6 +649,16 @@ export function createTaskCenterStore(options: {
     return requirementAnalyzer;
   };
 
+  AutoAnalyzer.configure({ getAnalyzer: getRequirementAnalyzer });
+  const analysisQueue = AnalysisQueue.getInstance();
+  const [autoAnalysisConfig, setAutoAnalysisConfigSignal] = createSignal(getAutoAnalysisConfig());
+
+  analysisQueue.configure({ maxAttempts: autoAnalysisConfig().maxRetries });
+  subscribeAutoAnalysisConfig((next) => {
+    setAutoAnalysisConfigSignal(next);
+    analysisQueue.configure({ maxAttempts: next.maxRetries });
+  });
+
   // Automation state store - persists automation progress
   // Using Record instead of Map for JSON serialization compatibility
   const automationStore = (() => {
@@ -639,6 +688,158 @@ export function createTaskCenterStore(options: {
     updater[tfsId] = status;
     tfsSyncStore[1](updater);
   };
+
+  // Auto analysis state store (in-memory)
+  type AutoAnalysisStateMap = Record<number, TaskAutoAnalysisState>;
+  const autoAnalysisStore = (() => {
+    const initialState: AutoAnalysisStateMap = {};
+    return createStore<AutoAnalysisStateMap>(initialState);
+  })();
+  const autoAnalysisMap = autoAnalysisStore[0];
+  const setAutoAnalysisState = (tfsId: number, next: Partial<TaskAutoAnalysisState>) => {
+    const current = autoAnalysisMap[tfsId];
+    autoAnalysisStore[1]({
+      [tfsId]: {
+        status: current?.status ?? "idle",
+        updatedAt: Date.now(),
+        ...current,
+        ...next,
+      },
+    });
+  };
+
+  const [queueStatus, setQueueStatus] = createSignal<AnalysisQueueStatus>({
+    queueLength: 0,
+    isProcessing: false,
+    currentWorkItemId: undefined,
+    estimatedTimeRemaining: undefined,
+  });
+
+  const ensureAnalysisCache = () => {
+    const workspaceRoot = options.activeWorkspaceRoot().trim();
+    if (!workspaceRoot) {
+      throw new Error("Workspace root is required for analysis cache");
+    }
+    AnalysisCache.configure({ workspaceRoot });
+    return workspaceRoot;
+  };
+
+  const mergeAnalysisData = (entry: CacheEntry | null, patch: Partial<AnalysisCacheData> = {}): AnalysisCacheData => ({
+    requirement: patch.requirement ?? entry?.data.requirement,
+    detection: patch.detection ?? entry?.data.detection,
+  });
+
+  const writeAnalysisCache = async (
+    workItemId: number,
+    patch: Partial<AnalysisCacheData>,
+    options: Partial<CacheEntry>
+  ) => {
+    ensureAnalysisCache();
+    const existing = await AnalysisCache.get(workItemId);
+    const data = mergeAnalysisData(existing, patch);
+    return AnalysisCache.set(workItemId, data, options);
+  };
+
+  const buildAnalysisResultFromCache = (entry: CacheEntry | null): AnalysisResult | null => {
+    if (!entry?.data.requirement || !entry.data.detection) return null;
+    const duration = entry.completedAt && entry.startedAt ? entry.completedAt - entry.startedAt : 0;
+    return {
+      workItemId: entry.workItemId,
+      requirement: entry.data.requirement,
+      detection: entry.data.detection,
+      duration,
+      startedAt: entry.startedAt,
+      completedAt: entry.completedAt,
+    };
+  };
+
+  const runAutoAnalysis = async (workItemId: number): Promise<AnalysisResult> => {
+    const startedAt = Date.now();
+    setAutoAnalysisState(workItemId, {
+      status: "analyzing",
+      progress: 0,
+      message: "分析中",
+      startedAt,
+      error: undefined,
+    });
+
+    await writeAnalysisCache(workItemId, {}, { status: "analyzing", startedAt, timestamp: startedAt });
+
+    try {
+      const result = await AutoAnalyzer.analyze(workItemId);
+      const completedAt = result.completedAt ?? Date.now();
+
+      await writeAnalysisCache(workItemId, {
+        requirement: result.requirement,
+        detection: result.detection,
+      }, {
+        status: "completed",
+        startedAt,
+        completedAt,
+        timestamp: completedAt,
+      });
+
+      setAutoAnalysisState(workItemId, {
+        status: "completed",
+        progress: 100,
+        message: "分析完成",
+        result,
+        completedAt,
+      });
+
+      return result;
+    } catch (error) {
+      const message = formatAutoAnalysisError(error);
+      const completedAt = Date.now();
+
+      await writeAnalysisCache(workItemId, {}, {
+        status: "failed",
+        startedAt,
+        completedAt,
+        timestamp: completedAt,
+        error: message,
+      });
+
+      setAutoAnalysisState(workItemId, {
+        status: "failed",
+        error: message,
+        completedAt,
+      });
+
+      throw error;
+    }
+  };
+
+  analysisQueue.configure({
+    processor: runAutoAnalysis,
+    maxAttempts: autoAnalysisConfig().maxRetries,
+    getPendingEntries: async () => {
+      ensureAnalysisCache();
+      return AnalysisCache.getPending();
+    },
+    getSyncContext: (workItemId, result) => {
+      if (!autoAnalysisConfig().autoSyncToTfs) return null;
+      const item = items().find((entry) => entry.tfsId === workItemId);
+      if (!item) return null;
+      const config = getTfsConfig();
+      if (!config) return null;
+      return {
+        tfsClient: new TFSClient(config),
+        parentId: item.tfsId,
+        parentTitle: item.title,
+        options: {
+          workspaceRoot: options.activeWorkspaceRoot(),
+          project: item.project || "WiNEX-General",
+          assignedTo: item.assignedTo ?? undefined,
+          priority: item.priority ?? undefined,
+        },
+      };
+    },
+    onSyncStatus: (workItemId, status) => setTfsSyncState(workItemId, status),
+    getSyncStatus: (workItemId) => tfsSyncState[workItemId] ?? null,
+  });
+
+  analysisQueue.subscribe((next) => setQueueStatus(next));
 
   // 清空所有 automation 状态（重置为初始状态）并刷新 TFS 数据
   const clearAutomationState = async () => {
@@ -988,6 +1189,101 @@ export function createTaskCenterStore(options: {
 
   const setSearch = (value: string) => setUi("search", value);
 
+  const readAnalysisCacheEntries = async (targetItems: TaskCenterItem[]) => {
+    const results: Record<number, CacheEntry | null> = {};
+    const concurrency = 8;
+    let index = 0;
+
+    const worker = async () => {
+      while (index < targetItems.length) {
+        const currentIndex = index;
+        index += 1;
+        const item = targetItems[currentIndex];
+        try {
+          results[item.tfsId] = await AnalysisCache.get(item.tfsId);
+        } catch {
+          results[item.tfsId] = null;
+        }
+      }
+    };
+
+    const workers = Array.from({ length: Math.min(concurrency, targetItems.length) }, () => worker());
+    await Promise.all(workers);
+    return results;
+  };
+
+  const refreshAnalysisStatus = async (targetItems?: TaskCenterItem[]) => {
+    const config = autoAnalysisConfig();
+    const list = targetItems ?? items();
+    const emptyResults: Record<number, CacheEntry | null> = {};
+
+    if (list.length === 0) return emptyResults;
+
+    try {
+      ensureAnalysisCache();
+    } catch {
+      return emptyResults;
+    }
+
+    const results = await readAnalysisCacheEntries(list);
+
+    for (const item of list) {
+      const entry = results[item.tfsId] ?? null;
+      
+      if (!entry) {
+        setAutoAnalysisState(item.tfsId, { status: "idle", message: undefined, error: undefined });
+        continue;
+      }
+
+      const expired = AnalysisCache.isExpired(entry.timestamp, config.cacheExpiryHours);
+      if (expired) {
+        setAutoAnalysisState(item.tfsId, {
+          status: "idle",
+          message: "缓存已过期",
+          error: undefined,
+        });
+        continue;
+      }
+
+      const result = buildAnalysisResultFromCache(entry);
+      const status = entry.status === "pending"
+        ? "queued"
+        : entry.status === "analyzing"
+          ? "analyzing"
+          : entry.status === "failed"
+            ? "failed"
+            : entry.status === "completed"
+              ? "completed"
+              : "idle";
+
+      setAutoAnalysisState(item.tfsId, {
+        status,
+        progress: status === "completed" ? 100 : status === "analyzing" ? 50 : 0,
+        message: entry.error ? `分析失败: ${entry.error}` : undefined,
+        error: entry.error,
+        result: result ?? undefined,
+        startedAt: entry.startedAt,
+        completedAt: entry.completedAt,
+      });
+    }
+
+    return results;
+  };
+
+  const enqueueAutoAnalysis = async (workItemId: number, priority: AnalysisPriority = "normal") => {
+    setAutoAnalysisState(workItemId, { status: "queued", message: "排队中" });
+    try {
+      await writeAnalysisCache(workItemId, {}, { status: "pending", timestamp: Date.now() });
+    } catch {
+      // ignore cache failures
+    }
+    analysisQueue.enqueue(workItemId, priority);
+  };
+
+  const reanalyzeWorkItem = async (item: TaskCenterItem) => {
+    await enqueueAutoAnalysis(item.tfsId, "high");
+  };
+
   const syncTasks = async (syncOptions?: { force?: boolean }) => {
     if (syncing() && !syncOptions?.force) return;
 
@@ -1027,6 +1323,38 @@ export function createTaskCenterStore(options: {
       const mergedItems = mergeTfsItemsWithAutomation(tfsItems, automationState ?? {});
       setItems(mergedItems);
 
+      const cacheEntries = await refreshAnalysisStatus(mergedItems);
+
+      if (autoAnalysisConfig().enabled) {
+        try {
+          const restored = await analysisQueue.restoreQueue({ maxStuckMinutes: autoAnalysisConfig().stuckMinutes });
+          if (restored.length > 0) {
+            for (const item of restored) {
+              setAutoAnalysisState(item.workItemId, { status: "queued", message: "队列已恢复" });
+              try {
+                await writeAnalysisCache(item.workItemId, {}, { status: "pending", timestamp: Date.now() });
+              } catch {
+                // ignore cache failures
+              }
+            }
+          }
+        } catch (error) {
+          console.warn('[TaskCenter] Failed to restore analysis queue:', error);
+        }
+
+        for (const item of mergedItems) {
+          const entry = cacheEntries[item.tfsId] ?? null;
+          const expired = entry ? AnalysisCache.isExpired(entry.timestamp, autoAnalysisConfig().cacheExpiryHours) : true;
+          const state = autoAnalysisMap[item.tfsId];
+          const shouldQueue = !entry || expired || entry.status === "failed" || entry.status === "pending";
+
+          if (shouldQueue && state?.status !== "analyzing" && state?.status !== "queued") {
+            const priority: AnalysisPriority = entry?.status === "failed" ? "high" : "normal";
+            await enqueueAutoAnalysis(item.tfsId, priority);
+          }
+        }
+      }
+
       // Refresh TFS subtask sync status (non-blocking)
       const needsSyncCheck = mergedItems.filter((item) => {
         const current = tfsSyncState[item.tfsId];
@@ -1040,7 +1368,7 @@ export function createTaskCenterStore(options: {
       setLastUpdatedAt(Date.now());
       setStatus("idle");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Task sync failed.";
+      const message = formatSyncError(error);
       setError(message);
       setStatus("error");
     } finally {
@@ -1168,10 +1496,55 @@ export function createTaskCenterStore(options: {
     // Step 1: Analyze requirement
     async analyzeRequirement(workItemId: number) {
       setWizard({ isLoading: true, error: null });
+      const config = autoAnalysisConfig();
       try {
+        const inMemory = autoAnalysisMap[workItemId];
+        if (inMemory?.status === "completed" && inMemory.result?.requirement) {
+          const completedAt = inMemory.result.completedAt ?? inMemory.completedAt ?? Date.now();
+          const expired = AnalysisCache.isExpired(completedAt, config.cacheExpiryHours);
+          if (!expired) {
+            console.log(`[TaskCenter] Using in-memory cache for #${workItemId}`);
+            setWizard('requirement', inMemory.result.requirement);
+            await this.detectRepositories(inMemory.result.requirement);
+            return;
+          }
+        }
+
+        let cacheEntry: CacheEntry | null = null;
+        try {
+          ensureAnalysisCache();
+          cacheEntry = await AnalysisCache.get(workItemId);
+        } catch (error) {
+          console.warn('[TaskCenter] Analysis cache read failed:', error);
+        }
+
+        if (cacheEntry && cacheEntry.data.requirement && !AnalysisCache.isExpired(cacheEntry.timestamp, config.cacheExpiryHours)) {
+          console.log(`[TaskCenter] Using cached analysis for #${workItemId}`);
+          setWizard('requirement', cacheEntry.data.requirement);
+          const cachedResult = buildAnalysisResultFromCache(cacheEntry);
+          if (cachedResult) {
+            setAutoAnalysisState(workItemId, {
+              status: "completed",
+              progress: 100,
+              message: "缓存命中",
+              result: cachedResult,
+              completedAt: cachedResult.completedAt,
+            });
+          }
+          await this.detectRepositories(cacheEntry.data.requirement);
+          return;
+        }
+
         const analyzer = getRequirementAnalyzer();
         const result = await analyzer.analyze(workItemId);
         setWizard('requirement', result);
+
+        try {
+          await writeAnalysisCache(workItemId, { requirement: result }, { status: "pending", timestamp: Date.now() });
+        } catch (error) {
+          console.warn('[TaskCenter] Failed to cache analysis result:', error);
+        }
+        setAutoAnalysisState(workItemId, { status: "queued", message: "需求已分析" });
         
         // Auto-detect repos after analysis
         await this.detectRepositories(result);
@@ -1194,6 +1567,34 @@ export function createTaskCenterStore(options: {
         
         // Auto-select high-confidence primary repos
         setWizard('selectedRepos', result.primary.filter((r: RepositoryMatch) => r.confidence > 0.6));
+
+        try {
+          const completedAt = Date.now();
+          await writeAnalysisCache(requirement.workItemId, {
+            requirement,
+            detection: result,
+          }, {
+            status: "completed",
+            completedAt,
+            timestamp: completedAt,
+          });
+
+          setAutoAnalysisState(requirement.workItemId, {
+            status: "completed",
+            progress: 100,
+            message: "分析完成",
+            result: {
+              workItemId: requirement.workItemId,
+              requirement,
+              detection: result,
+              duration: 0,
+              completedAt,
+            },
+            completedAt,
+          });
+        } catch (error) {
+          console.warn('[TaskCenter] Failed to cache detection result:', error);
+        }
       } finally {
         setWizard('isLoading', false);
       }
@@ -1856,12 +2257,8 @@ export function createTaskCenterStore(options: {
    * 获取 TFS 同步状态
    * @param tfsId TFS 工作项 ID
    */
-  function getTfsSyncStatus(tfsId: number): TfsSyncStatus {
-    return tfsSyncState[tfsId] || {
-      analysisSynced: false,
-      planSynced: false,
-      isSyncing: false,
-    };
+  function getTfsSyncStatus(tfsId: number): TfsSyncStatus | undefined {
+    return tfsSyncState[tfsId];
   }
 
   /**
@@ -2197,6 +2594,10 @@ EOF`,
     automationState,
     setAutomationState,
     clearAutomationState,
+    autoAnalysisMap,
+    queueStatus,
+    refreshAnalysisStatus,
+    reanalyzeWorkItem,
     // TFS Configuration
     tfsConfig: tfsConfigState,
     setTfsConfig,

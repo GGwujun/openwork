@@ -96,7 +96,7 @@ export interface AIRepoDetectionResult {
 }
 
 /**
- * AI 分析进度
+ * AI 分析进度（用于 UI 展示，0-100）
  */
 export interface AnalysisProgress {
   stage: 'fetching' | 'analyzing' | 'detecting_repos' | 'completed' | 'error';
@@ -105,14 +105,14 @@ export interface AnalysisProgress {
 }
 
 /**
- * 仓库识别结果
+ * 仓库识别结果（置信度 0-1）
  */
 export interface DetectionResult {
   /** 主要修改的仓库 */
   primary: RepositoryMatch[];
   /** 次要影响的仓库 */
   secondary: RepositoryMatch[];
-  /** 整体置信度 */
+  /** 整体置信度（0-1） */
   confidence: number;
 }
 
@@ -185,4 +185,56 @@ export interface DetectionRules {
 export interface RepositoryIndex {
   repositories: RepositoryConfig[];
   rules: DetectionRules;
+}
+
+/**
+ * 自动分析优先级
+ */
+export type AnalysisPriority = "high" | "normal" | "low";
+
+/**
+ * 队列项
+ */
+export interface AnalysisQueueItem {
+  workItemId: number;
+  priority: AnalysisPriority;
+  attempts: number;
+  enqueuedAt: number;
+  lastError?: string;
+}
+
+/**
+ * 队列状态
+ */
+export interface AnalysisQueueStatus {
+  queueLength: number;
+  isProcessing: boolean;
+  currentWorkItemId?: number;
+  estimatedTimeRemaining?: number;
+}
+
+/**
+ * 自动分析结果
+ */
+export interface AnalysisResult {
+  workItemId: number;
+  requirement: ParsedRequirement;
+  detection: DetectionResult;
+  duration: number;
+  startedAt?: number;
+  completedAt?: number;
+}
+
+/**
+ * 自动分析状态
+ */
+export interface TaskAutoAnalysisState {
+  status: "idle" | "queued" | "analyzing" | "completed" | "failed";
+  progress?: number;
+  message?: string;
+  result?: AnalysisResult;
+  error?: string;
+  updatedAt: number;
+  startedAt?: number;
+  completedAt?: number;
 }
