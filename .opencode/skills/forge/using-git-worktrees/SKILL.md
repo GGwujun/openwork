@@ -72,6 +72,16 @@ Per Jesse's rule "Fix broken things immediately":
 
 No .gitignore verification needed - outside project entirely.
 
+## Resume an Existing Worktree
+
+Use this when the change already has a worktree and you are continuing later.
+
+1. **Open the existing worktree** (often `.worktrees/<change>/`)
+2. **Verify you are on the correct branch** (`git status`)
+3. **Confirm the plan exists** at `forge/tracks/<change>/tasks.md`
+4. **Update progress** in `tasks.md` and pick the next unchecked task
+5. **Continue with execution** (return to the calling skill)
+
 ## Creation Steps
 
 ### 1. Detect Project Name
@@ -149,6 +159,7 @@ Ready to implement <feature-name>
 | `worktrees/` exists | Use it (verify ignored) |
 | Both exist | Use `.worktrees/` |
 | Neither exists | Check CLAUDE.md → Ask user |
+| Worktree already exists | Reuse it and verify status |
 | Directory not ignored | Add to .gitignore + commit |
 | Tests fail during baseline | Report failures + ask |
 | No package.json/Cargo.toml | Skip dependency install |
@@ -164,6 +175,11 @@ Ready to implement <feature-name>
 
 - **Problem:** Creates inconsistency, violates project conventions
 - **Fix:** Follow priority: existing > CLAUDE.md > ask
+
+### Creating a duplicate worktree
+
+- **Problem:** Confuses progress, splits work across folders
+- **Fix:** Reuse the existing worktree and resume from tasks.md
 
 ### Proceeding with failing tests
 

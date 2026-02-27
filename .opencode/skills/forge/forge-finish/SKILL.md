@@ -1,9 +1,9 @@
 ---
-name: finishing-a-development-branch
+name: forge-finish
 description: Use when implementation is complete, all tests pass, and you need to decide how to integrate the work - guides completion of development work by presenting structured options for merge, PR, or cleanup
 ---
 
-# Finishing a Development Branch
+# Forge Finish
 
 ## Overview
 
@@ -13,7 +13,7 @@ Guide completion of development work by presenting clear options and handling ch
 
 If using Forge, ensure forge-archive is complete before finishing the branch.
 
-**Announce at start:** "I'm using the finishing-a-development-branch skill to complete this work."
+**Announce at start:** "I'm using the forge-finish skill to complete this work."
 
 ## The Process
 

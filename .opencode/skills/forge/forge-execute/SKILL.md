@@ -24,6 +24,7 @@ Single entry for the execution stage: ensure an isolated workspace, pick an exec
    - If unclear, list `forge/tracks/` and prompt for selection
 2. **Ensure isolated workspace**
    - Use `forge:using-git-worktrees`
+   - If a worktree already exists for this change, reuse it and skip creation
 3. **Choose execution mode**
    - Tasks mostly independent + stay in this session → `forge:subagent-driven-development`
    - Need batch checkpoints or separate session → `forge:executing-plans`
@@ -41,6 +42,7 @@ Single entry for the execution stage: ensure an isolated workspace, pick an exec
 |-----------|--------|
 | No plan yet | Use `forge-plan` |
 | Need isolated workspace | Use `forge:using-git-worktrees` |
+| Worktree already exists | Reuse it and verify status |
 | Same session, tasks independent | Use `forge:subagent-driven-development` |
 | Batch execution + checkpoints | Use `forge:executing-plans` |
 | Tasks done, ready to integrate | Use `forge:finishing-a-development-branch` |
@@ -59,10 +61,29 @@ Answer these in order:
    - Yes → use `forge:executing-plans`
    - No → keep the choice from step 2
 
+## Resume an Existing Worktree
+
+Use this when the change already has a worktree and you are continuing later.
+
+1. **Open the existing worktree** (often `.worktrees/<change>/`)
+2. **Verify you are on the correct branch** (`git status`)
+3. **Confirm the plan exists** at `forge/tracks/<change>/tasks.md`
+4. **Update progress** in `tasks.md` and pick the next unchecked task
+5. **Continue at Flow step 3** (execution mode)
+
+**Example commands**:
+
+```bash
+git worktree list
+cd .worktrees/<change>
+git status
+```
+
 ## Common Mistakes
 
 - Executing on main/master without a worktree
 - Starting execution without a plan
+- Creating a second worktree for the same change
 - Skipping finish workflow after tasks complete
 - **Not updating tasks.md checkbox status after task completion (only updating TodoWrite)**
 

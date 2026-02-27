@@ -13,6 +13,19 @@ Verify that implementation matches Forge artifacts with a three-dimension report
 
 **Prerequisite:** Apply `verification-before-completion` before any "Ready" claim in the report.
 
+## Flow
+
+```
+forge-verify
+├── Step 0: Apply verification-before-completion principle
+│   └── Run verification command fresh, read output, THEN claim
+│
+└── Step 1-7: Execute Forge three-dimension verification
+    ├── Completeness
+    ├── Correctness
+    └── Coherence
+```
+
 ## When to Use
 
 - Before archiving a Forge change
@@ -27,42 +40,61 @@ Verify that implementation matches Forge artifacts with a three-dimension report
 
 ## Steps
 
-1. **Select the change**
-   - If no change specified, list `forge/tracks/` and prompt for selection
-   - Do not guess
+### Step 0: Apply `verification-before-completion`
 
-2. **Load artifacts**
-   - `forge/tracks/<change>/tasks.md` (if present)
-   - `forge/tracks/<change>/intent.md` (if present)
-   - `forge/tracks/<change>/design.md` (if present)
-   - `forge/tracks/<change>/contracts/<domain>/contract.md` (delta contracts)
+**BEFORE any verification claim:**
 
-3. **Initialize report structure**
-   - Completeness
-   - Correctness
-   - Coherence
-   - Severity: CRITICAL / WARNING / SUGGESTION
+1. **IDENTIFY**: What command proves this claim?
+2. **RUN**: Execute the FULL command (fresh, complete)
+3. **READ**: Full output, check exit code, count failures
+4. **VERIFY**: Does output confirm the claim?
+5. **ONLY THEN**: Make the claim
 
-4. **Verify Completeness**
-   - Tasks: count `- [ ]` vs `- [x]`
-   - Delta contracts: ensure each requirement has an implementation signal
-   - Missing tasks or missing requirement coverage -> CRITICAL
+**No shortcuts. No "should pass". Evidence before claims.**
 
-5. **Verify Correctness**
-   - For each requirement and scenario in delta contracts:
-     - Search codebase for evidence
-     - Check tests for scenario coverage
-     - Divergence -> WARNING
+### Step 1: Select the change
 
-6. **Verify Coherence**
-   - Compare code against design decisions
-   - Flag mismatches as WARNING
-   - Pattern inconsistency -> SUGGESTION
+- If no change specified, list `forge/tracks/` and prompt for selection
+- Do not guess
 
-7. **Generate report**
-   - Summary table
-   - Grouped issues with actionable recommendations
-   - Final assessment: Ready / Ready with warnings / Blocked
+### Step 2: Load artifacts
+
+- `forge/tracks/<change>/tasks.md` (if present)
+- `forge/tracks/<change>/intent.md` (if present)
+- `forge/tracks/<change>/design.md` (if present)
+- `forge/tracks/<change>/contracts/<domain>/contract.md` (delta contracts)
+
+### Step 3: Initialize report structure
+
+- Completeness
+- Correctness
+- Coherence
+- Severity: CRITICAL / WARNING / SUGGESTION
+
+### Step 4: Verify Completeness
+
+- Tasks: count `- [ ]` vs `- [x]`
+- Delta contracts: ensure each requirement has an implementation signal
+- Missing tasks or missing requirement coverage -> CRITICAL
+
+### Step 5: Verify Correctness
+
+- For each requirement and scenario in delta contracts:
+  - Search codebase for evidence
+  - Check tests for scenario coverage
+  - Divergence -> WARNING
+
+### Step 6: Verify Coherence
+
+- Compare code against design decisions
+- Flag mismatches as WARNING
+- Pattern inconsistency -> SUGGESTION
+
+### Step 7: Generate report
+
+- Summary table
+- Grouped issues with actionable recommendations
+- Final assessment: Ready / Ready with warnings / Blocked
 
 ## Graceful Degradation
 
