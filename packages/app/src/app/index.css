@@ -101,19 +101,33 @@ select:disabled {
 }
 
 .badge-blue {
-  @apply bg-blue-100 text-blue-700;
+  background-color: var(--blue-3);
+  color: var(--blue-11);
 }
 
 .badge-green {
-  @apply bg-emerald-100 text-emerald-700;
+  background-color: var(--jade-3);
+  color: var(--jade-11);
 }
 
 .badge-purple {
-  @apply bg-purple-100 text-purple-700;
+  background-color: var(--purple-3);
+  color: var(--purple-11);
+}
+
+.badge-amber {
+  background-color: var(--amber-3);
+  color: var(--amber-11);
 }
 
 .badge-red {
-  @apply bg-red-100 text-red-700 cursor-pointer hover:bg-red-200;
+  background-color: var(--red-3);
+  color: var(--red-11);
+  cursor: pointer;
+}
+
+.badge-red:hover {
+  background-color: var(--red-4);
 }
 
 .badge-pulse {

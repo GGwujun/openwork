@@ -64,10 +64,18 @@ export default function AnalysisStatusBadge(props: AnalysisStatusBadgeProps) {
         <span>{label()}</span>
       </button>
 
-      <Show when={props.tfsSyncStatus?.analysisSynced}>
-        <span class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold badge-purple">
+      <Show when={props.tfsSyncStatus?.analysisSynced || props.tfsSyncStatus?.planSynced}>
+        <span class={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+          props.tfsSyncStatus?.analysisSynced && props.tfsSyncStatus?.planSynced
+            ? 'badge-purple' // 两者都同步
+            : 'badge-amber' // 只同步了一个
+        }`}>
           <CheckCircle2 size={12} />
-          已同步 TFS
+          {props.tfsSyncStatus?.analysisSynced && props.tfsSyncStatus?.planSynced
+            ? '已同步 TFS'
+            : props.tfsSyncStatus?.analysisSynced
+              ? '分析已同步'
+              : '计划已同步'}
         </span>
       </Show>
     </div>
