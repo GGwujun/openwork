@@ -2,12 +2,21 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "so
 
 import type { TaskCenterItem, TaskCenterStatus, TaskCenterStage } from "../types";
 import type { ParsedTask } from "../lib/tasks-parser";
-import type { ParsedRequirement, RepositoryMatch, DetectionResult, PlanWizardState } from "../../types/requirement-analyzer";
+import type {
+  ParsedRequirement,
+  RepositoryMatch,
+  DetectionResult,
+  PlanWizardState,
+  TaskAutoAnalysisState,
+  AnalysisQueueStatus,
+} from "../../types/requirement-analyzer";
+import type { TfsSyncStatus } from "../lib/sync-task-to-tfs";
 
 import { formatRelativeTime } from "../utils";
 import { usePlatform } from "../context/platform";
 import { currentLocale, t } from "../../i18n";
 import RequirementWizard from "../components/requirement-wizard";
+import AnalysisStatusBadge from "../components/task-card/AnalysisStatusBadge";
 
 import Button from "../components/button";
 import {
@@ -96,7 +105,10 @@ export type TaskCenterViewProps = {
     syncAllToTFS?: (item: TaskCenterItem) => Promise<boolean>;
   };
   // TFS Sync props
-  getTfsSyncStatus?: (tfsId: number) => { analysisSynced: boolean; planSynced: boolean; isSyncing: boolean; error?: string; };
+  getTfsSyncStatus?: (tfsId: number) => TfsSyncStatus | undefined;
+  autoAnalysisMap?: Record<number, TaskAutoAnalysisState>;
+  queueStatus?: AnalysisQueueStatus;
+  onReanalyze?: (item: TaskCenterItem) => void;
   // Dev/Test props
   clearAutomationState?: () => void;
 };
@@ -432,6 +444,14 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
               </Button>
             </div>
           </div>
+          <Show when={props.queueStatus && (props.queueStatus.queueLength > 0 || props.queueStatus.isProcessing)}>
+            <div class="mt-2 text-[11px] text-dls-secondary">
+              队列中: {props.queueStatus?.queueLength ?? 0} 个任务
+            <Show when={props.queueStatus?.isProcessing && props.queueStatus?.currentWorkItemId}>
+              {" · 正在分析 #"}{props.queueStatus?.currentWorkItemId}
+            </Show>
+            </div>
+          </Show>
         </div>
         <Show when={props.error}>
           <div class="rounded-2xl border border-red-7/40 bg-red-3/60 px-5 py-4 text-sm text-red-11">
@@ -511,7 +531,16 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                         const syncStatus = props.getTfsSyncStatus?.(item.tfsId);
                         const hasAnalysis = !!syncStatus?.analysisSynced;
                         const hasPlan = !!syncStatus?.planSynced;
-
+                        const analysisState = () => props.autoAnalysisMap?.[item.tfsId];
+                        const analysisStatus = () => analysisState()?.status ?? "idle";
+                        const analysisProgress = () => Math.round(analysisState()?.progress ?? 0);
+                        const isAnalyzing = () => analysisStatus() === "queued" || analysisStatus() === "analyzing";
+                        const canGeneratePlan = () => analysisStatus() === "completed";
+                        const analysisBusyLabel = () =>
+                          analysisStatus() === "queued"
+                            ? "AI分析排队中"
+                            : `AI分析中 ${analysisProgress()}%`;
+                        
                         return (
                         <div class="rounded-2xl border border-dls-border bg-dls-surface px-4 py-4 shadow-sm">
                           <div class="flex items-start justify-between gap-3">
@@ -551,6 +580,15 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                               </span>
                             </div>
                           </Show>
+
+                          <div class="mt-2">
+                            <AnalysisStatusBadge
+                              workItemId={item.tfsId}
+                              autoAnalysisState={analysisState()}
+                              tfsSyncStatus={syncStatus}
+                              onReanalyze={() => props.onReanalyze?.(item)}
+                            />
+                          </div>
 
                           <div class="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-dls-secondary">
                             <Show when={item.priority}>
@@ -594,10 +632,19 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                   <Button
                                     variant="primary"
                                     class="h-8 px-3 text-xs"
-                                    onClick={() => handleStartAutomation(item)}
+                                    onClick={() => (isAnalyzing() ? undefined : canGeneratePlan() ? handleStartAutomation(item) : props.onReanalyze?.(item))}
+                                    disabled={isAnalyzing()}
                                   >
-                                    <Play size={12} />
-                                    {translate("task_center.generate_plan")}
+                                    <Show when={isAnalyzing()} fallback={<Play size={12} />}>
+                                      <Loader2 size={12} class="animate-spin" />
+                                    </Show>
+                                    <Show when={isAnalyzing()} fallback={
+                                      <Show when={canGeneratePlan()} fallback={"开始分析"}>
+                                        {translate("task_center.generate_plan")}
+                                      </Show>
+                                    }>
+                                      {analysisBusyLabel()}
+                                    </Show>
                                     <Show when={hasAnalysis}>
                                       <span class="ml-2 rounded-full bg-emerald-3 px-2 py-0.5 text-[10px] font-semibold text-emerald-11">
                                         {translate("task_center.analysis_synced")}
