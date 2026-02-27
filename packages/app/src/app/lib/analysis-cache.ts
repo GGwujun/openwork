@@ -1,6 +1,7 @@
 import type { ParsedRequirement, DetectionResult } from "../../types/requirement-analyzer";
 import { fsReadDir } from "./tauri";
 import { fsCreateDir, fsReadFile, fsWriteFile } from "./fs-utils";
+import { isTauriRuntime } from "../utils";
 
 export type AnalysisCacheStatus = "pending" | "analyzing" | "completed" | "failed" | "expired";
 
@@ -150,6 +151,10 @@ export const createAnalysisCache = (initial?: Partial<AnalysisCacheConfig>) => {
     if (!workspaceRoot) {
       throw new Error("AnalysisCache workspaceRoot is not configured");
     }
+    if (!isTauriRuntime()) {
+      adapter = createMemoryCacheAdapter();
+      return adapter;
+    }
     return buildDefaultAdapter(workspaceRoot);
   };
 
@@ -208,8 +213,12 @@ export const createAnalysisCache = (initial?: Partial<AnalysisCacheConfig>) => {
         completedAt: options?.completedAt,
       };
 
-      await activeAdapter.createDir(getCacheDir(workItemId));
-      await activeAdapter.writeFile(getCachePath(workItemId), serializeEntry(entry));
+      try {
+        await activeAdapter.createDir(getCacheDir(workItemId));
+        await activeAdapter.writeFile(getCachePath(workItemId), serializeEntry(entry));
+      } catch (error) {
+        console.warn("[AnalysisCache] Failed to persist cache entry", { workItemId, error });
+      }
       return entry;
     },
 

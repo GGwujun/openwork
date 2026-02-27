@@ -38,6 +38,8 @@ export interface TfsSyncStatus {
   error?: string;
   /** 是否正在同步中 */
   isSyncing?: boolean;
+  /** 同步开始时间戳（毫秒） */
+  syncStartedAt?: number;
 }
 
 /**

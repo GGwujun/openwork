@@ -149,6 +149,19 @@ export class AnalysisQueue {
   }
 
   private async processItem(item: AnalysisQueueItem) {
+    // Check if already synced to TFS before processing
+    const baseStatus = this.getSyncStatus?.(item.workItemId) ?? {
+      analysisSynced: false,
+      planSynced: false,
+    };
+    
+    // 只有当分析和计划都同步完成时，才跳过（与 task-center 保持一致）
+    const isFullySynced = baseStatus.analysisSynced && baseStatus.planSynced;
+    if (isFullySynced) {
+      console.log(`[AnalysisQueue] Skipping #${item.workItemId} - fully synced to TFS`);
+      return;
+    }
+
     while (item.attempts < this.maxAttempts) {
       try {
         if (!this.processor) {
@@ -214,10 +227,23 @@ export class AnalysisQueue {
     const stuckAfterMs = (options?.maxStuckMinutes ?? 30) * 60 * 1000;
 
     for (const entry of pending) {
+      // Check if already synced to TFS before restoring
+      const syncStatus = this.getSyncStatus?.(entry.workItemId) ?? {
+        analysisSynced: false,
+        planSynced: false,
+      };
+      
+      // 只有当分析和计划都同步完成时，才跳过恢复（与 task-center 保持一致）
+      const isFullySynced = syncStatus.analysisSynced && syncStatus.planSynced;
+      
+      if (isFullySynced) {
+        console.log(`[AnalysisQueue] Skip restoring #${entry.workItemId} - fully synced to TFS`);
+        continue;
+      }
+
       const isProcessing = this.currentItem?.workItemId === entry.workItemId;
       const isQueued = this.queue.some((item) => item.workItemId === entry.workItemId);
       if (isProcessing || isQueued) continue;
-
       const startedAt = entry.startedAt ?? entry.timestamp;
       const isStuck = entry.status === "analyzing" && Number.isFinite(startedAt) && now - startedAt > stuckAfterMs;
       const priority: AnalysisPriority = entry.status === "failed" || isStuck ? "high" : "normal";

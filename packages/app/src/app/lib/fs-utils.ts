@@ -4,6 +4,8 @@ import { isTauriRuntime, normalizeDirectoryPath } from "../utils";
 import { fsReadFile as tauriReadFile, fsWriteFile as tauriWriteFile } from "./tauri";
 
 const normalizePathInput = (value: string) => value.trim().replace(/\\/g, "/");
+const shouldSuppressFsError = (message: string) =>
+  /file does not exist|plugin not found|not allowed/i.test(message);
 
 const isAbsolutePath = (value: string) =>
   value.startsWith("/") || /^[a-zA-Z]:\//.test(value);
@@ -39,7 +41,9 @@ export async function fsReadFile(path: string, workspaceRoot: string) {
     return await tauriReadFile(normalizedPath, normalizedRoot);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("[fs-utils] fsReadFile failed", { path: normalizedPath, workspaceRoot: normalizedRoot, message });
+    if (!shouldSuppressFsError(message)) {
+      console.error("[fs-utils] fsReadFile failed", { path: normalizedPath, workspaceRoot: normalizedRoot, message });
+    }
     throw new Error(`Failed to read file: ${message}`);
   }
 }
@@ -55,7 +59,9 @@ export async function fsWriteFile(path: string, content: string, workspaceRoot: 
     await tauriWriteFile(normalizedPath, content, normalizedRoot);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("[fs-utils] fsWriteFile failed", { path: normalizedPath, workspaceRoot: normalizedRoot, message });
+    if (!shouldSuppressFsError(message)) {
+      console.error("[fs-utils] fsWriteFile failed", { path: normalizedPath, workspaceRoot: normalizedRoot, message });
+    }
     throw new Error(`Failed to write file: ${message}`);
   }
 }
@@ -74,8 +80,10 @@ export async function fsCreateDir(path: string, workspaceRoot: string): Promise<
     await mkdir(resolvedPath, { recursive: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error("[fs-utils] fsCreateDir failed", { path: resolvedPath, message });
-    throw new Error(`Failed to create directory: ${message}`);
+    if (!shouldSuppressFsError(message)) {
+      console.error("[fs-utils] fsCreateDir failed", { path: resolvedPath, message });
+      throw new Error(`Failed to create directory: ${message}`);
+    }
   }
 }
 
