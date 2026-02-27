@@ -124,6 +124,8 @@ export interface PlanWizardState {
   isOpen: boolean;
   /** 当前步骤 1/2/3 */
   step: 1 | 2 | 3;
+  /** 当前处理的工作项ID */
+  currentWorkItemId?: number;
   /** 解析后的需求 */
   requirement: ParsedRequirement | null;
   /** 识别到的仓库 */
@@ -147,6 +149,8 @@ export interface PlanWizardState {
   /** 单步自动流程状态 */
   autoPlanStep?: 'idle' | 'analysis' | 'repos' | 'plan' | 'completed';
   autoPlanProgress?: number;
+  /** 是否自动生成计划中 */
+  isAutoGenerating?: boolean;
 }
 
 /**
