@@ -652,7 +652,35 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                     </Show>
                                   </Button>
                                 }
-                              >
+>
+                                <div class="flex gap-2">
+                                  <Button
+                                    variant="outline"
+                                    class="h-8 px-3 text-xs"
+                                    onClick={() => handleStartAutomation(item, true)}
+                                  >
+                                    <ExternalLink size={12} />
+                                    {translate("task_center.view_plan")}
+                                  </Button>
+                                  <Button
+                                    variant="primary"
+                                    class="h-8 px-3 text-xs"
+                                    onClick={() => {
+                                      // TODO: 开始开发逻辑
+                                      console.log('开始开发:', item.tfsId);
+                                    }}
+                                  >
+                                    <Play size={12} />
+                                    开始开发
+                                  </Button>
+                                </div>
+                              </Show>
+                            </div>
+                          </Show>
+
+                          <Show when={item.status === "progress" || item.status === "done" || item.status === "failed"}>
+                            <div class="mt-4">
+                              <div class="flex gap-2">
                                 <Button
                                   variant="outline"
                                   class="h-8 px-3 text-xs"
@@ -661,20 +689,18 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                   <ExternalLink size={12} />
                                   {translate("task_center.view_plan")}
                                 </Button>
-                              </Show>
-                            </div>
-                          </Show>
-
-                          <Show when={item.status === "progress" || item.status === "done" || item.status === "failed"}>
-                            <div class="mt-4">
-                              <Button
-                                variant="outline"
-                                class="h-8 px-3 text-xs"
-                                onClick={() => handleStartAutomation(item, true)}
-                              >
-                                <ExternalLink size={12} />
-                                {translate("task_center.view_plan")}
-                              </Button>
+                                <Button
+                                  variant="primary"
+                                  class="h-8 px-3 text-xs"
+                                  onClick={() => {
+                                    // TODO: 开始开发逻辑
+                                    console.log('开始开发:', item.tfsId);
+                                  }}
+                                >
+                                  <Play size={12} />
+                                  开始开发
+                                </Button>
+                              </div>
                             </div>
                           </Show>
 
