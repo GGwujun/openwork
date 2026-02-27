@@ -176,16 +176,29 @@ export default function StepAnalysis(props: StepAnalysisProps) {
           </Show>
         </div>
       </Show>
-
       {/* Footer Buttons */}
       <div class="flex justify-end pt-4 border-t border-dls-border">
-        <Button
-          variant="primary"
-          onClick={props.onNext}
-          disabled={props.isLoading || !props.requirement}
+        <Show
+          when={props.hasPlan}
+          fallback={(
+            <Button
+              variant="primary"
+              onClick={props.onNext}
+              disabled={props.isLoading || !props.requirement}
+            >
+              {props.isLoading ? '分析中...' : '下一步：识别仓库'}
+            </Button>
+          )}
         >
-          {props.hasPlan ? '查看计划' : '下一步：识别仓库'}
-        </Button>
+          <Button
+            variant="primary"
+            onClick={props.onNext}
+            disabled={props.isLoading}
+          >
+            <Loader2 size={16} class="mr-2 animate-spin" />
+            自动规划中...
+          </Button>
+        </Show>
       </div>
     </div>
   );

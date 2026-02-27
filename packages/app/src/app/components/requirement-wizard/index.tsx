@@ -117,17 +117,9 @@ export default function RequirementWizard(props: RequirementWizardProps) {
               onNext={props.onNextStep}
               onGenerate={props.onCreateDevelopmentPlan || props.onGeneratePlan}
               hasPlan={!!(props.intent || props.design || props.tasks)}
+              isAutoGenerating={props.wizard.isAutoGenerating}
             />
           </Show>
-
-
-
-
-
-
-
-
-
 
           <Show when={props.step === 3}>
             <StepGeneration

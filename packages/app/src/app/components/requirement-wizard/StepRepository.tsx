@@ -9,6 +9,7 @@ import {
   ChevronUp,
   AlertCircle,
   Plus,
+  Loader2 as Loader2Icon,
 } from "lucide-solid";
 import type {
   RepositoryMatch,
@@ -24,8 +25,8 @@ interface StepRepositoryProps {
   onNext: () => void;
   onGenerate?: () => void;
   hasPlan?: boolean;
+  isAutoGenerating?: boolean;
 }
-
 export default function StepRepository(props: StepRepositoryProps) {
   const [showSecondary, setShowSecondary] = createSignal(false);
   const [showManualAdd, setShowManualAdd] = createSignal(false);
@@ -152,21 +153,34 @@ export default function StepRepository(props: StepRepositoryProps) {
       </Show>
 
       {/* Footer Buttons */}
-      <div class="flex justify-between pt-4 border-t border-dls-border">
-        <Button variant="outline" onClick={props.onBack}>
-          上一步
-        </Button>
-        <Button
-          variant="primary"
-          onClick={() => {
-            props.onNext();
-            props.onGenerate?.();
-          }}
-          disabled={selectedCount() === 0}
-        >
-          {props.hasPlan ? '查看计划' : '生成开发计划'}
-        </Button>
-      </div>
+      <Show
+        when={!props.isAutoGenerating}
+        fallback={(
+          <div class="flex justify-center pt-4 border-t border-dls-border">
+            <div class="flex items-center gap-2 text-blue-600">
+              <Loader2Icon size={20} class="animate-spin" />
+              <span class="text-sm font-medium">正在自动生成开发计划...
+              </span>
+            </div>
+          </div>
+        )}
+      >
+        <div class="flex justify-between pt-4 border-t border-dls-border">
+          <Button variant="outline" onClick={props.onBack}>
+            上一步
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => {
+              props.onNext();
+              props.onGenerate?.();
+            }}
+            disabled={selectedCount() === 0}
+          >
+            {props.hasPlan ? '查看计划' : '生成开发计划'}
+          </Button>
+        </div>
+      </Show>
     </div>
   );
 }
