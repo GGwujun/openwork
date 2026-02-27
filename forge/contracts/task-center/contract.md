@@ -59,3 +59,110 @@ Define Task Center automation behavior for "已分析" work items and map Forge/
 - 任务完成后，自动显示下一个任务的"开始执行"按钮
 - 用户可以查看计划文件了解当前执行位置和剩余步骤
 - 执行状态实时同步到 UI
+
+## Task Auto Analysis
+
+### REQ-10: Auto analysis types
+```typescript
+interface TaskAutoAnalysisState {
+  workItemId: number;
+  status: 'pending' | 'analyzing' | 'analyzed' | 'failed';
+  progress: number;
+  requirement?: ParsedRequirement;
+  detection?: DetectionResult;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+  tfsSync: {
+    analysisTaskCreated: boolean;
+    analysisTaskId?: number;
+    syncedAt?: string;
+    error?: string;
+  };
+}
+
+interface AnalysisResult {
+  workItemId: number;
+  title: string;
+  project: string;
+  assignedTo?: string;
+  requirement: ParsedRequirement;
+  detection: DetectionResult;
+  timestamp: string;
+  duration?: number;
+}
+
+interface AnalysisQueueStatus {
+  isProcessing: boolean;
+  queueLength: number;
+  currentWorkItemId?: number;
+  estimatedTimeRemaining?: number;
+}
+
+interface QueueItem {
+  workItemId: number;
+  priority: 'high' | 'normal' | 'low';
+  retryCount: number;
+  maxRetries: number;
+}
+
+interface CacheEntry {
+  workItemId: number;
+  timestamp: string;
+  data: AnalysisResult;
+}
+
+interface AutoAnalysisConfig {
+  enabled: boolean;
+  autoAnalyzeOnSync: boolean;
+  autoSyncToTfs: boolean;
+  cacheExpiryHours: number;
+  maxRetries: number;
+}
+```
+
+### REQ-11: Auto analysis library APIs
+```typescript
+class AnalysisQueue {
+  static getInstance(): AnalysisQueue
+  enqueue(workItemId: number, priority?: 'high' | 'normal' | 'low'): void
+  subscribe(callback: (status: AnalysisQueueStatus) => void): () => void
+}
+
+class AnalysisCache {
+  static get(workItemId: number): Promise<CacheEntry | null>
+  static set(workItemId: number, data: AnalysisResult): Promise<void>
+  static isExpired(timestamp: string, hours: number): boolean
+  static cleanExpired(maxAgeHours?: number): Promise<void>
+  static getPending(): Promise<Array<{ workItemId: number; status: string }>>
+}
+
+class AutoAnalyzer {
+  static async analyze(workItemId: number): Promise<AnalysisResult>
+}
+```
+- Storage Path: `{workspaceRoot}/forge/tracks/tfs-{workItemId}/.analysis/cache.json`
+- Analysis flow: fetch TFS item -> RequirementAnalyzer.analyzeWithAI -> detectReposWithAI -> return result.
+
+### REQ-12: TaskCenterStore auto analysis extension
+- State additions: `autoAnalysisMap`, `queueStatus`.
+- Methods: `refreshAnalysisStatus(workItemId)`, `reanalyzeWorkItem(workItemId)`, `getTfsSyncStatus(workItemId): TfsSyncStatus | undefined`.
+- `syncTasks()` behavior: after sync, initialize pending analysis states and enqueue items into `AnalysisQueue`.
+- Wizard analyze: check memory cache -> check file cache -> if hit, jump to Step 2; else run original analysis.
+
+### REQ-13: UI behaviors for auto analysis
+- Task card shows `AnalysisStatusBadge` with `autoAnalysisState` and `tfsSyncStatus` and supports reanalyze action.
+- Button states map to analysis status: 未分析/分析中/分析完成/计划已生成.
+- Queue status indicator shows when `queueLength > 0` with current work item ID.
+- Settings include: enable auto analysis, auto sync to TFS, cache expiry hours (1-168), max retries (1-5).
+
+### REQ-14: Badge styling + animations
+```css
+.badge-blue { @apply bg-blue-100 text-blue-700; }
+.badge-green { @apply bg-emerald-100 text-emerald-700; }
+.badge-purple { @apply bg-purple-100 text-purple-700; }
+.badge-red { @apply bg-red-100 text-red-700 cursor-pointer hover:bg-red-200; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+.animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+```
