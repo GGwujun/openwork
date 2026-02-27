@@ -4,15 +4,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RequirementAnalyzer, AIAnalysisResult } from '../index';
 import type { TFSClient } from '../../tfs';
-
-// Mock fetch for OpenCode API
-const mockFetch = vi.fn();
-global.fetch = mockFetch;
+import { createMockClient } from './utils/mock-opencode-client';
 
 describe('RequirementAnalyzer (AI 增强版)', () => {
   let analyzer: RequirementAnalyzer;
   let mockTfsClient: TFSClient;
-  const opencodeUrl = 'http://localhost:3000';
+  const createAnalyzerWithOutputs = (outputs: Array<string | Error>) => {
+    const queue = [...outputs];
+    const fallback = outputs.length > 0 ? outputs[outputs.length - 1] : "";
+    const { client } = createMockClient(() => queue.shift() ?? fallback);
+    return new RequirementAnalyzer(
+      mockTfsClient,
+      () => client,
+      () => null,
+      vi.fn()
+    );
+  };
 
   beforeEach(() => {
     // Mock TFS Client
@@ -20,13 +27,13 @@ describe('RequirementAnalyzer (AI 增强版)', () => {
       getWorkItem: vi.fn()
     } as unknown as TFSClient;
 
+    const { client } = createMockClient(() => "");
     analyzer = new RequirementAnalyzer(
       mockTfsClient,
-      opencodeUrl,
-      vi.fn() // progress callback
+      () => client,
+      () => null,
+      vi.fn()
     );
-
-    mockFetch.mockClear();
   });
 
   afterEach(() => {
@@ -47,41 +54,24 @@ describe('RequirementAnalyzer (AI 增强版)', () => {
 
       mockTfsClient.getWorkItem = vi.fn().mockResolvedValue(workItem);
       
-      // Mock AI response for requirement analysis
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          messages: [{
-            role: 'assistant',
-            content: JSON.stringify({
-              summary: '参数校验: 修改spark登录插件配置',
-              keyFeatures: ['修改登录插件', '配置参数校验'],
-              techStack: { frontend: true, backend: true, database: false },
-              domain: '认证中心',
-              keywords: ['spark', '登录', '校验', '配置']
-            })
-          }]
+      analyzer = createAnalyzerWithOutputs([
+        JSON.stringify({
+          summary: '参数校验: 修改spark登录插件配置',
+          keyFeatures: ['修改登录插件', '配置参数校验'],
+          techStack: { frontend: true, backend: true, database: false },
+          domain: '认证中心',
+          keywords: ['spark', '登录', '校验', '配置']
+        }),
+        JSON.stringify({
+          primaryRepos: [{
+            repoId: 'spark-login-plugin',
+            reason: '需求明确要求修改spark的登录插件，需要添加配置验证逻辑',
+            confidence: 0.95
+          }],
+          secondaryRepos: [],
+          analysis: '基于需求内容和关键词，主要涉及spark-login-plugin仓库'
         })
-      });
-
-      // Mock AI response for repo detection
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          messages: [{
-            role: 'assistant',
-            content: JSON.stringify({
-              primaryRepos: [{
-                repoId: 'spark-login-plugin',
-                reason: '需求明确要求修改spark的登录插件，需要添加配置验证逻辑',
-                confidence: 0.95
-              }],
-              secondaryRepos: [],
-              analysis: '基于需求内容和关键词，主要涉及spark-login-plugin仓库'
-            })
-          }]
-        })
-      });
+      ]);
 
       const result = await analyzer.analyze(12345);
 
@@ -103,39 +93,24 @@ describe('RequirementAnalyzer (AI 增强版)', () => {
 
       mockTfsClient.getWorkItem = vi.fn().mockResolvedValue(workItem);
 
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            messages: [{
-              role: 'assistant',
-              content: JSON.stringify({
-                summary: '缺陷修复: 修复登录闪退问题',
-                keyFeatures: ['修复登录闪退', '优化登录稳定性'],
-                techStack: { frontend: true, backend: false, database: false },
-                domain: '用户认证',
-                keywords: ['登录', '闪退', '修复']
-              })
-            }]
-          })
+      analyzer = createAnalyzerWithOutputs([
+        JSON.stringify({
+          summary: '缺陷修复: 修复登录闪退问题',
+          keyFeatures: ['修复登录闪退', '优化登录稳定性'],
+          techStack: { frontend: true, backend: false, database: false },
+          domain: '用户认证',
+          keywords: ['登录', '闪退', '修复']
+        }),
+        JSON.stringify({
+          primaryRepos: [{
+            repoId: 'spark-login-plugin',
+            reason: '登录闪退问题需要修改登录插件的错误处理逻辑',
+            confidence: 0.88
+          }],
+          secondaryRepos: [],
+          analysis: '登录相关问题主要涉及登录插件模块'
         })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            messages: [{
-              role: 'assistant',
-              content: JSON.stringify({
-                primaryRepos: [{
-                  repoId: 'spark-login-plugin',
-                  reason: '登录闪退问题需要修改登录插件的错误处理逻辑',
-                  confidence: 0.88
-                }],
-                secondaryRepos: [],
-                analysis: '登录相关问题主要涉及登录插件模块'
-              })
-            }]
-          })
-        });
+      ]);
 
       const result = await analyzer.analyze(12346);
 
@@ -162,35 +137,20 @@ describe('RequirementAnalyzer (AI 增强版)', () => {
 
         mockTfsClient.getWorkItem = vi.fn().mockResolvedValue(workItem);
 
-        mockFetch
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({
-              messages: [{
-                role: 'assistant',
-                content: JSON.stringify({
-                  summary: '功能开发',
-                  keyFeatures: testCase.expected,
-                  techStack: { frontend: true, backend: true, database: false },
-                  domain: '通用',
-                  keywords: []
-                })
-              }]
-            })
+        analyzer = createAnalyzerWithOutputs([
+          JSON.stringify({
+            summary: '功能开发',
+            keyFeatures: testCase.expected,
+            techStack: { frontend: true, backend: true, database: false },
+            domain: '通用',
+            keywords: []
+          }),
+          JSON.stringify({
+            primaryRepos: [],
+            secondaryRepos: [],
+            analysis: '测试用例'
           })
-          .mockResolvedValueOnce({
-            ok: true,
-            json: async () => ({
-              messages: [{
-                role: 'assistant',
-                content: JSON.stringify({
-                  primaryRepos: [],
-                  secondaryRepos: [],
-                  analysis: '测试用例'
-                })
-              }]
-            })
-          });
+        ]);
 
         const result = await analyzer.analyze(12347);
         
@@ -215,45 +175,30 @@ describe('RequirementAnalyzer (AI 增强版)', () => {
 
       mockTfsClient.getWorkItem = vi.fn().mockResolvedValue(workItem);
 
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            messages: [{
-              role: 'assistant',
-              content: JSON.stringify({
-                summary: '参数校验: 修改spark登录插件配置',
-                keyFeatures: ['修改登录插件', '配置参数校验'],
-                techStack: { frontend: true, backend: true, database: false },
-                domain: '认证中心',
-                keywords: ['spark', '登录', '校验']
-              })
-            }]
-          })
+      analyzer = createAnalyzerWithOutputs([
+        JSON.stringify({
+          summary: '参数校验: 修改spark登录插件配置',
+          keyFeatures: ['修改登录插件', '配置参数校验'],
+          techStack: { frontend: true, backend: true, database: false },
+          domain: '认证中心',
+          keywords: ['spark', '登录', '校验']
+        }),
+        JSON.stringify({
+          primaryRepos: [{
+            repoId: 'spark-ui',
+            reason: '需求涉及spark前端框架配置与校验，主要影响spark UI前端模块',
+            confidence: 0.95
+          }],
+          secondaryRepos: [],
+          analysis: '基于需求摘要和关键词匹配'
         })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            messages: [{
-              role: 'assistant',
-              content: JSON.stringify({
-                primaryRepos: [{
-                  repoId: 'spark-login-plugin',
-                  reason: '需求明确要求修改spark的登录插件，需要添加配置参数校验功能',
-                  confidence: 0.95
-                }],
-                secondaryRepos: [],
-                analysis: '基于需求摘要和关键词匹配'
-              })
-            }]
-          })
-        });
+      ]);
 
       const result = await analyzer.analyze(12348);
 
       expect(result.aiRepos.primaryRepos).toHaveLength(1);
       expect(result.aiRepos.primaryRepos[0].aiConfidence).toBeGreaterThanOrEqual(0.8);
-      expect(result.aiRepos.primaryRepos[0].name).toBe('Spark 登录插件');
+      expect(result.aiRepos.primaryRepos[0].name).toBe('Spark UI前端框架');
     });
 
     it('应该过滤掉置信度 < 80% 的仓库', async () => {
@@ -267,46 +212,31 @@ describe('RequirementAnalyzer (AI 增强版)', () => {
 
       mockTfsClient.getWorkItem = vi.fn().mockResolvedValue(workItem);
 
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            messages: [{
-              role: 'assistant',
-              content: JSON.stringify({
-                summary: '性能优化: 优化用户查询接口',
-                keyFeatures: ['优化查询接口'],
-                techStack: { frontend: false, backend: true, database: true },
-                domain: '查询系统',
-                keywords: ['查询', '优化']
-              })
-            }]
-          })
+      analyzer = createAnalyzerWithOutputs([
+        JSON.stringify({
+          summary: '性能优化: 优化用户查询接口',
+          keyFeatures: ['优化查询接口'],
+          techStack: { frontend: false, backend: true, database: true },
+          domain: '查询系统',
+          keywords: ['查询', '优化']
+        }),
+        JSON.stringify({
+          primaryRepos: [
+            {
+              repoId: 'billing-api',
+              reason: '需要优化用户查询逻辑',
+              confidence: 0.85
+            },
+            {
+              repoId: 'outpatient-web',
+              reason: '低置信度仓库',
+              confidence: 0.75
+            }
+          ],
+          secondaryRepos: [],
+          analysis: '测试低置信度过滤'
         })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({
-            messages: [{
-              role: 'assistant',
-              content: JSON.stringify({
-                primaryRepos: [
-                  {
-                    repoId: 'user-service',
-                    reason: '需要优化用户查询逻辑',
-                    confidence: 0.85
-                  },
-                  {
-                    repoId: 'unknown-repo', // 这个应该被过滤掉
-                    reason: '低置信度仓库',
-                    confidence: 0.75
-                  }
-                ],
-                secondaryRepos: [],
-                analysis: '测试低置信度过滤'
-              })
-            }]
-          })
-        });
+      ]);
 
       const result = await analyzer.analyze(12349);
 
@@ -318,12 +248,13 @@ describe('RequirementAnalyzer (AI 增强版)', () => {
 
   describe('cleanHtml - HTML 清理', () => {
     it('应该正确清理 HTML 标签', () => {
-      const analyzer = new RequirementAnalyzer({} as TFSClient, opencodeUrl);
+      const { client } = createMockClient(() => "");
+      const analyzer = new RequirementAnalyzer({} as TFSClient, () => client);
       
       const testCases = [
         { input: '<p>测试</p>', expected: '测试' },
         { input: '<h1>标题</h1><p>内容</p>', expected: '标题 内容' },
-        { input: '&nbsp;&lt;&gt;&amp;', expected: ' <>&' },
+        { input: '&nbsp;&lt;&gt;&amp;', expected: '<>&' },
         { input: '<div>  多   空格  </div>', expected: '多 空格' }
       ];
 
@@ -337,7 +268,8 @@ describe('RequirementAnalyzer (AI 增强版)', () => {
 
   describe('parseAnalysisResponse - JSON 解析', () => {
     it('应该正确解析 markdown 代码块包裹的 JSON', () => {
-      const analyzer = new RequirementAnalyzer({} as TFSClient, opencodeUrl);
+      const { client } = createMockClient(() => "");
+      const analyzer = new RequirementAnalyzer({} as TFSClient, () => client);
       
       const testCases = [
         {
@@ -361,7 +293,8 @@ describe('RequirementAnalyzer (AI 增强版)', () => {
     });
 
     it('应该在 JSON 解析失败时抛出错误', () => {
-      const analyzer = new RequirementAnalyzer({} as TFSClient, opencodeUrl);
+      const { client } = createMockClient(() => "");
+      const analyzer = new RequirementAnalyzer({} as TFSClient, () => client);
       
       expect(() => {
         (analyzer as any).parseAnalysisResponse('invalid json');
@@ -380,9 +313,14 @@ describe('RequirementAnalyzer (AI 增强版)', () => {
       };
 
       mockTfsClient.getWorkItem = vi.fn().mockResolvedValue(workItem);
-      mockFetch.mockRejectedValue(new Error('OpenCode API 错误'));
+      analyzer = createAnalyzerWithOutputs([new Error('OpenCode API 错误')]);
 
-      await expect(analyzer.analyze(12350)).rejects.toThrow('AI 分析失败');
+      vi.useFakeTimers();
+      const promise = analyzer.analyze(12350);
+      const expectation = expect(promise).rejects.toThrow('AI 分析失败');
+      await vi.runAllTimersAsync();
+      await expectation;
+      vi.useRealTimers();
     });
 
     it('应该处理工作项不存在的情况', async () => {
