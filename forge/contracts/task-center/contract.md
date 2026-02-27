@@ -13,30 +13,30 @@ Define Task Center automation behavior for "已分析" work items and map Forge/
 - Use `TaskCenterStage` for the main phase and `subStage` for implementing details.
 - Implementing subStage values include: `workspace-prep`, `plan-exec`, `tests`, `fixes`, `ready-review`.
 
-### REQ-3: Progress TFS state update (重要变更)
-- When user clicks "生成计划" button, **first update TFS state from "已分析" to "活动"**.
-- Only after TFS update succeeds, create Forge artifacts (intent.md, design.md, tasks.md).
-- If TFS update fails, show error and remain in ToDo state.
+### REQ-3: Progress state (local only)
+- When user clicks "生成计划" button, **do NOT update TFS state** (keep it as "已分析").
+- Task Center `progress` status is a **local automation state**, independent of TFS state.
+- Create Forge artifacts (intent.md, design.md, tasks.md) directly without TFS state change.
 
 ### REQ-3a: Done meaning
 - Done indicates the implementation plan is complete and waiting for archive.
-- Done TFS state remains "活动" (not updated).
+- Done is a local Task Center state; TFS state remains "已分析" (not updated).
 
 ### REQ-4: Blocked meaning
 - Blocked represents an interrupted or divergent workflow.
 - Blocked retains the last `stage` and `subStage` for diagnosis.
-- Blocked TFS state remains "活动" (not updated).
+- Blocked is a local state; TFS state remains "已分析" (not updated).
 
-### REQ-5: TFS 状态流转 (重要)
-- **TFS 状态有两处更新**：
-  1. **开始自动化时**：从"已分析"更新为"活动"（REQ-3）
-  2. **归档完成时**：从"活动"更新为"已解决"（REQ-5a）
-- Progress、Done、Blocked 状态的 TFS 状态都保持为"活动"
+### REQ-5: TFS 状态流转 (重要变更)
+- **TFS 状态只在一处更新**：
+  - **开发完成后**：从"已分析"更新为"已解决"（REQ-5a）
+  - Task Center 的 Progress、Done、Blocked 都是本地状态，不改变 TFS 状态。
+- TFS 查询始终只返回状态为"已分析"的工作项。
 
-### REQ-5a: Archived meaning
-- Archived means documentation is archived and code changes are finalized.
-- Only after archive completes, update TFS state from "活动" to "已解决".
-
+### REQ-5a: TFS resolution
+- After development is complete (implementation done), update TFS state from "已分析" to "已解决".
+- This is the **only** TFS state update performed by Task Center.
+- Add a comment: "任务已完成，代码已提交 (via Task Center)".
 ### REQ-6: Forge artifacts
 - Generate artifacts under `forge/tracks/workitem-autorun/`:
   - `intent.md`
