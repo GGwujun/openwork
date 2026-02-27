@@ -55,6 +55,15 @@ OpenWork is designed to be:
   - list installed `.opencode/skills` folders
   - install from OpenPackage (`opkg install ...`)
   - import a local skill folder into `.opencode/skills/<skill-name>`
+
+## Task Center Auto Analysis (Experimental)
+
+OpenWork can automatically analyze TFS work items, cache results, and optionally sync analysis subtasks back to TFS.
+
+**Usage**
+- Open **Settings** → **Auto Analysis**.
+- Enable auto analysis and (optionally) auto sync to TFS.
+- Go to **Task Center** and run **Sync** to enqueue pending items.
  
 
 ## Skill Manager    
