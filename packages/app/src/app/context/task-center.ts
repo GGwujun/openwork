@@ -47,6 +47,22 @@ import {
   type TaskCenterArtifactStore,
   type TaskCenterPlanDocs,
 } from "../lib/task-center-artifacts";
+import { PlanDocsLoader } from "../../automation/plan-execution/plan-docs-loader";
+import { PlanDocsValidator } from "../../automation/plan-execution/plan-docs-validator";
+import { ExecutionPromptBuilder } from "../../automation/plan-execution/execution-prompt-builder";
+import { OpenCodeSessionManager } from "../../automation/plan-execution/open-code-session-manager";
+import { ExecutionProgressMonitor } from "../../automation/plan-execution/progress-monitor";
+import { SessionPoller, type SessionMessage } from "../../automation/plan-execution/session-poller";
+import { ExecutionResultParser } from "../../automation/plan-execution/execution-result-parser";
+import { ArchiveMonitor } from "../../automation/plan-execution/archive-monitor";
+import { TFSSyncManager } from "../../automation/plan-execution/tfs-sync-manager";
+import type { ExecutionContext, ExecutionMessage, ExecutionOptions } from "../../automation/plan-execution/types";
+import {
+  getOrCreateWorkspace,
+  type WorkspaceMapEntry,
+} from "../../automation/plan-execution/workspace-manager";
+import { getTrackPath } from "../../automation/plan-execution/track-paths";
+import { createPlanExecutionStore } from "./plan-execution";
 import { AnalysisQueue } from '../lib/analysis-queue';
 import { AutoAnalyzer } from '../lib/auto-analyzer';
 
@@ -707,6 +723,11 @@ export function createTaskCenterStore(options: {
   const [executing, setExecuting] = createSignal(false);
   const [showTaskPanel, setShowTaskPanel] = createSignal(false);
 
+  const planExecutionStore = createPlanExecutionStore();
+  const planExecutionState = planExecutionStore.store;
+  const [planExecutionPanelOpen, setPlanExecutionPanelOpen] = createSignal(false);
+  const [planExecutionItemId, setPlanExecutionItemId] = createSignal<number | null>(null);
+
   // Requirement Analysis Wizard State - 需求分析向导状态
   const [wizard, setWizard] = createStore<PlanWizardState>({
     isOpen: false,
@@ -853,14 +874,6 @@ export function createTaskCenterStore(options: {
     estimatedTimeRemaining: undefined,
   });
 
-  type WorkspaceMapEntry = {
-    workspaceId: string;
-    workspaceRoot?: string;
-    repoUrlKey?: string;
-    repoPathKey?: string;
-    updatedAt: number;
-  };
-
   const workspaceMapStore = createStore<Record<number, WorkspaceMapEntry>>({});
   const workspaceMap = workspaceMapStore[0];
   const setWorkspaceMapEntry = (tfsId: number, entry: WorkspaceMapEntry) => {
@@ -887,6 +900,20 @@ export function createTaskCenterStore(options: {
   let artifactsStore: TaskCenterArtifactStore | null = null;
   let artifactsScope = "";
   let cacheAdapterScope = "";
+  let planDocsLoader: PlanDocsLoader | null = null;
+  let planDocsLoaderRoot = "";
+
+  const executionMonitor = new ExecutionProgressMonitor();
+  const executionResultParser = new ExecutionResultParser();
+  const archiveMonitor = new ArchiveMonitor();
+  const sessionManager = new OpenCodeSessionManager({
+    client: options.client,
+    getModel: options.getSelectedModel,
+  });
+  const executionPollers = new Map<number, SessionPoller>();
+  const executionArchiveTimeouts = new Map<number, number>();
+  const executionErrorCounts = new Map<number, number>();
+  const executionRetryTimeouts = new Map<number, number>();
 
   const getArtifactsScope = () => options.activeWorkspaceRoot().trim() || "default";
 
@@ -897,6 +924,15 @@ export function createTaskCenterStore(options: {
       artifactsScope = scope;
     }
     return artifactsStore;
+  };
+
+  const getPlanDocsLoader = () => {
+    const root = options.activeWorkspaceRoot().trim();
+    if (!planDocsLoader || planDocsLoaderRoot !== root) {
+      planDocsLoader = new PlanDocsLoader({ workspaceRoot: root });
+      planDocsLoaderRoot = root;
+    }
+    return planDocsLoader;
   };
 
   const ensureAnalysisCache = () => {
@@ -928,8 +964,8 @@ export function createTaskCenterStore(options: {
   const readArtifact = async (tfsId: number) => getArtifactsStore().get(tfsId);
 
   const readPlanDocs = async (tfsId: number): Promise<TaskCenterPlanDocs | null> => {
-    const artifact = await readArtifact(tfsId);
-    return artifact?.planDocs ?? null;
+    const loader = getPlanDocsLoader();
+    return loader.load(tfsId);
   };
 
   const writePlanDocs = async (
@@ -1064,57 +1100,27 @@ export function createTaskCenterStore(options: {
     return { match: null, reason: "未匹配到对应工作区，请先创建或选择工作区" };
   };
 
+  const getWorkspaceManagerOptions = () => {
+    if (!options.workspaces || !options.activateWorkspace || !options.createWorkspaceForRepo) {
+      return null;
+    }
+    return {
+      getWorkspaces: options.workspaces,
+      createWorkspaceForRepo: options.createWorkspaceForRepo,
+      activateWorkspace: options.activateWorkspace,
+      getActiveWorkspaceRoot: options.activeWorkspaceRoot,
+      getWorkspaceMap: () => workspaceMap,
+      setWorkspaceMapEntry,
+      readWorkspaceOriginUrl,
+    };
+  };
+
   const ensureWorkspaceForRepos = async (item: TaskCenterItem, repos: RepositoryMatch[]): Promise<boolean> => {
     try {
       console.log("[TaskCenter] Ensure workspace for repos", { tfsId: item.tfsId, repoCount: repos.length });
-      const { match, reason } = await resolveWorkspaceForRepos(item, repos);
-      if (!match) {
-        const primaryRepo = pickPrimaryRepo(repos);
-        if (primaryRepo && options.createWorkspaceForRepo) {
-          console.log("[TaskCenter] Workspace not found, attempting auto-create", {
-            tfsId: item.tfsId,
-            repoId: primaryRepo.id,
-            repoName: primaryRepo.name,
-            repoPath: primaryRepo.path,
-          });
-          const repoUrl = isGitUrl(primaryRepo.path) ? primaryRepo.path : null;
-          const folderPath = repoUrl ? null : primaryRepo.path;
-          const created = await options.createWorkspaceForRepo({ repoUrl, folderPath, preset: "starter" });
-
-          if (created) {
-            console.log("[TaskCenter] Workspace created", { workspaceId: created.id, workspacePath: created.path });
-            if (options.activateWorkspace) {
-              const activated = await options.activateWorkspace(created.id);
-              if (!activated) {
-                console.warn("[TaskCenter] Workspace activation failed", { workspaceId: created.id });
-                const message = "工作区切换失败，请手动选择匹配的工作区";
-                setWizard({ isAutoGenerating: false, isLoading: false, error: message });
-                setAutoAnalysisState(item.tfsId, {
-                  status: "failed",
-                  message,
-                  error: message,
-                });
-                return false;
-              }
-            }
-
-            const repoUrlKey = normalizeGitRemote(repoUrl ?? "");
-            const repoPathKey = normalizePathValue(primaryRepo.path).toLowerCase();
-            setWorkspaceMapEntry(item.tfsId, {
-              workspaceId: created.id,
-              workspaceRoot: created.path,
-              repoUrlKey: repoUrlKey ?? undefined,
-              repoPathKey,
-              updatedAt: Date.now(),
-            });
-
-            setWizard({ error: null });
-            return true;
-          }
-        }
-
-        const message = reason ?? "未匹配到对应工作区，请先创建或选择工作区";
-        console.warn("[TaskCenter] Workspace match failed", { tfsId: item.tfsId, reason: message });
+      const managerOptions = getWorkspaceManagerOptions();
+      if (!managerOptions) {
+        const message = "工作区管理不可用，请在桌面端选择或创建工作区";
         setWizard({ isAutoGenerating: false, isLoading: false, error: message });
         setAutoAnalysisState(item.tfsId, {
           status: "failed",
@@ -1124,27 +1130,10 @@ export function createTaskCenterStore(options: {
         return false;
       }
 
-      const currentRoot = normalizePathValue(options.activeWorkspaceRoot().trim()).toLowerCase();
-      const matchRoot = normalizePathValue(match.root).toLowerCase();
-      if (currentRoot && matchRoot && currentRoot === matchRoot) {
-        console.log("[TaskCenter] Workspace already active", { workspaceId: match.workspace.id, root: match.root });
-        const repoUrl = pickPrimaryRepo(repos)?.path ?? "";
-        const repoUrlKey = normalizeGitRemote(repoUrl);
-        const repoPathKey = normalizePathValue(pickPrimaryRepo(repos)?.path ?? "").toLowerCase();
-        setWorkspaceMapEntry(item.tfsId, {
-          workspaceId: match.workspace.id,
-          workspaceRoot: match.root,
-          repoUrlKey: repoUrlKey ?? undefined,
-          repoPathKey,
-          updatedAt: Date.now(),
-        });
-        setWizard({ error: null });
-        return true;
-      }
-
-      if (!options.activateWorkspace) {
-        console.warn("[TaskCenter] Workspace activation unavailable", { workspaceId: match.workspace.id });
-        const message = "无法切换工作区，请手动选择匹配的工作区";
+      const result = await getOrCreateWorkspace(item.tfsId, repos, managerOptions);
+      if (!result.success || !result.workspace) {
+        const message = result.error ?? "未匹配到对应工作区，请先创建或选择工作区";
+        console.warn("[TaskCenter] Workspace ensure failed", { tfsId: item.tfsId, reason: message });
         setWizard({ isAutoGenerating: false, isLoading: false, error: message });
         setAutoAnalysisState(item.tfsId, {
           status: "failed",
@@ -1153,31 +1142,6 @@ export function createTaskCenterStore(options: {
         });
         return false;
       }
-
-      console.log("[TaskCenter] Activating workspace", { workspaceId: match.workspace.id, root: match.root });
-      const activated = await options.activateWorkspace(match.workspace.id);
-      if (!activated) {
-        console.warn("[TaskCenter] Workspace activation failed", { workspaceId: match.workspace.id });
-        const message = "工作区切换失败，请手动选择匹配的工作区";
-        setWizard({ isAutoGenerating: false, isLoading: false, error: message });
-        setAutoAnalysisState(item.tfsId, {
-          status: "failed",
-          message,
-          error: message,
-        });
-        return false;
-      }
-
-      const repoUrl = pickPrimaryRepo(repos)?.path ?? "";
-      const repoUrlKey = normalizeGitRemote(repoUrl);
-      const repoPathKey = normalizePathValue(pickPrimaryRepo(repos)?.path ?? "").toLowerCase();
-      setWorkspaceMapEntry(item.tfsId, {
-        workspaceId: match.workspace.id,
-        workspaceRoot: match.root,
-        repoUrlKey: repoUrlKey ?? undefined,
-        repoPathKey,
-        updatedAt: Date.now(),
-      });
 
       setWizard({ error: null });
       return true;
@@ -3086,9 +3050,546 @@ export function createTaskCenterStore(options: {
     }
   }
 
+  // Plan execution functions
+  const buildExecutionContext = (
+    item: TaskCenterItem,
+    planDocs: TaskCenterPlanDocs,
+    selectedRepos: RepositoryMatch[],
+    workspaceRoot: string,
+    overrides?: Partial<ExecutionOptions>
+  ): ExecutionContext => ({
+    tfsId: item.tfsId,
+    title: item.title,
+    workspaceRoot,
+    trackPath: getTrackPath(item.tfsId),
+    planDocs,
+    selectedRepos,
+    options: {
+      allowQuestions: true,
+      includeForgeSkills: true,
+      requireArchive: true,
+      requireVerification: true,
+      ...overrides,
+    },
+  });
+
+  const toExecutionMessage = (message: SessionMessage, fallbackIndex: number): ExecutionMessage | null => {
+    const textParts = (message.parts ?? []).filter((part) => part.type === "text" && part.text);
+    const content = textParts.map((part) => part.text ?? "").join("");
+    if (!content) return null;
+    const createdAt =
+      message.info?.createdAt ?? message.info?.created ?? Date.now();
+
+    return {
+      id: message.info?.id ?? String(fallbackIndex),
+      role: (message.info?.role as ExecutionMessage["role"]) ?? "assistant",
+      content,
+      createdAt: typeof createdAt === "number" ? createdAt : Date.now(),
+    };
+  };
+
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => {
+      window.setTimeout(() => resolve(), ms);
+    });
+
+  const syncExecutionToTfs = async (tfsId: number, result: ExecutionResult) => {
+    const tfsConfig = getTfsConfig();
+    if (!tfsConfig) return;
+
+    const tfsSync = new TFSSyncManager(new TFSClient(tfsConfig));
+    let lastError: string | null = null;
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        await tfsSync.syncExecutionComplete(tfsId, result);
+        planExecutionStore.updateExecution(tfsId, { syncError: null });
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        lastError = `TFS 同步失败（${attempt}/3）：${message}`;
+        planExecutionStore.updateExecution(tfsId, { syncError: lastError });
+        if (attempt < 3) {
+          await sleep(1000 * attempt);
+        }
+      }
+    }
+
+    if (lastError) {
+      console.warn("[TaskCenter] TFS sync failed", lastError);
+    }
+  };
+
+  const markFatalExecutionError = (tfsId: number, reason: string, sessionId?: string | null) => {
+    const now = Date.now();
+    const current = planExecutionStore.getExecution(tfsId);
+    const startedAt = current?.startedAt ?? now;
+
+    console.error("[TaskCenter] Fatal execution error", { tfsId, reason });
+    planExecutionStore.updateExecution(tfsId, {
+      status: "failed",
+      error: reason,
+      completedAt: now,
+      startedAt,
+    });
+    planExecutionStore.appendMessages(tfsId, [
+      {
+        id: `fatal-${now}`,
+        role: "system",
+        content: reason,
+        createdAt: now,
+        kind: "error",
+      },
+    ]);
+
+    setAutomationState(tfsId, {
+      status: "failed",
+      stage: "implementing",
+      subStage: "plan-exec",
+      sessionId: sessionId ?? current?.sessionId ?? null,
+      blockedReason: reason,
+      updatedAt: now,
+    });
+    stopExecutionPoller(tfsId);
+    void handleExecutionCompleted(tfsId);
+  };
+
+  const stopExecutionPoller = (tfsId: number) => {
+    const poller = executionPollers.get(tfsId);
+    if (poller) {
+      poller.stop();
+      executionPollers.delete(tfsId);
+    }
+    const timeoutId = executionArchiveTimeouts.get(tfsId);
+    if (timeoutId) {
+      window.clearTimeout(timeoutId);
+      executionArchiveTimeouts.delete(tfsId);
+    }
+    const retryTimeout = executionRetryTimeouts.get(tfsId);
+    if (retryTimeout) {
+      window.clearTimeout(retryTimeout);
+      executionRetryTimeouts.delete(tfsId);
+    }
+    executionErrorCounts.delete(tfsId);
+  };
+
+  const scheduleArchiveTimeout = (tfsId: number) => {
+    const existing = executionArchiveTimeouts.get(tfsId);
+    if (existing) window.clearTimeout(existing);
+    const timeoutId = window.setTimeout(() => {
+      const state = planExecutionStore.getExecution(tfsId);
+      if (!state || state.status !== "completed" || state.archivePath) return;
+      planExecutionStore.updateExecution(tfsId, {
+        status: "failed",
+        error: "归档超时，请手动检查 forge-archive 状态",
+        completedAt: Date.now(),
+      });
+      setAutomationState(tfsId, {
+        status: "failed",
+        stage: "implementing",
+        subStage: "plan-exec",
+        sessionId: state.sessionId ?? null,
+        blockedReason: "归档超时",
+        updatedAt: Date.now(),
+      });
+      stopExecutionPoller(tfsId);
+    }, 60_000);
+    executionArchiveTimeouts.set(tfsId, timeoutId);
+  };
+
+  const handleExecutionCompleted = async (tfsId: number) => {
+    const state = planExecutionStore.getExecution(tfsId);
+    if (!state) return;
+    planExecutionStore.addHistory(tfsId, {
+      sessionId: state.sessionId ?? null,
+      status: state.status,
+      startedAt: state.startedAt ?? null,
+      completedAt: state.completedAt ?? null,
+      archivePath: state.archivePath ?? null,
+    });
+
+    if (state.result) {
+      await syncExecutionToTfs(tfsId, state.result);
+    }
+  };
+
+  const handleExecutionMessages = (item: TaskCenterItem, sessionId: string, messages: SessionMessage[]) => {
+    const executionMessages = messages
+      .map((message, index) => toExecutionMessage(message, index))
+      .filter((message): message is ExecutionMessage => Boolean(message));
+
+    if (executionMessages.length === 0) return;
+
+    const enriched = executionMessages.map((message) => {
+      const progress = executionMonitor.parseProgress(message);
+      const question = executionMonitor.parseQuestion(message);
+      const archive = archiveMonitor.detect(message);
+      const failed = executionMonitor.isExecutionFailed(message);
+      const completed = executionMonitor.isExecutionComplete(message);
+      const kind = archive.ok
+        ? "archive"
+        : failed
+          ? "error"
+          : question
+            ? "question"
+            : completed
+              ? "complete"
+              : progress
+                ? "progress"
+                : "info";
+      return {
+        message: { ...message, kind },
+        progress,
+        question,
+        archive,
+        failed,
+        completed,
+      };
+    });
+
+    planExecutionStore.appendMessages(item.tfsId, enriched.map((entry) => entry.message));
+    if (executionErrorCounts.get(item.tfsId)) {
+      executionErrorCounts.set(item.tfsId, 0);
+    }
+
+    for (const entry of enriched) {
+      if (entry.progress) {
+        planExecutionStore.updateExecution(item.tfsId, { progress: entry.progress, status: "running" });
+      }
+
+      if (entry.question) {
+        planExecutionStore.setQuestion(item.tfsId, entry.question);
+        const poller = executionPollers.get(item.tfsId);
+        poller?.pause();
+        planExecutionStore.updateExecution(item.tfsId, { paused: true, status: "waiting" });
+        setAutomationState(item.tfsId, {
+          status: "progress",
+          stage: "implementing",
+          subStage: "plan-exec",
+          sessionId,
+          blockedReason: entry.question,
+          updatedAt: Date.now(),
+        });
+        continue;
+      }
+
+      if (!entry.archive.ok && entry.archive.error) {
+        const archiveError = `${entry.archive.error}。请手动运行 forge-archive 完成归档。`;
+        planExecutionStore.updateExecution(item.tfsId, {
+          status: "failed",
+          error: archiveError,
+          completedAt: Date.now(),
+        });
+        stopExecutionPoller(item.tfsId);
+        setAutomationState(item.tfsId, {
+          status: "failed",
+          stage: "implementing",
+          subStage: "plan-exec",
+          sessionId,
+          blockedReason: archiveError,
+          updatedAt: Date.now(),
+        });
+        void handleExecutionCompleted(item.tfsId);
+        continue;
+      }
+
+      if (entry.archive.ok) {
+        const current = planExecutionStore.getExecution(item.tfsId);
+        const archiveCompletedAt = Date.now();
+        const baseResult = executionResultParser.parse(current?.messages ?? enriched.map((entry) => entry.message));
+        const startedAt = current?.startedAt ?? baseResult.startedAt;
+        const durationMs =
+          startedAt != null ? Math.max(0, archiveCompletedAt - startedAt) : baseResult.durationMs;
+        const result: ExecutionResult = {
+          ...baseResult,
+          archivePath: entry.archive.path ?? baseResult.archivePath,
+          startedAt,
+          completedAt: archiveCompletedAt,
+          durationMs,
+        };
+        planExecutionStore.updateExecution(item.tfsId, {
+          status: "archived",
+          archivePath: entry.archive.path ?? null,
+          completedAt: archiveCompletedAt,
+          result,
+        });
+        stopExecutionPoller(item.tfsId);
+        setAutomationState(item.tfsId, {
+          status: "done",
+          stage: "archiving",
+          subStage: null,
+          sessionId,
+          blockedReason: null,
+          updatedAt: Date.now(),
+        });
+        void handleExecutionCompleted(item.tfsId);
+        continue;
+      }
+
+      if (entry.failed) {
+        planExecutionStore.updateExecution(item.tfsId, {
+          status: "failed",
+          error: entry.message.content,
+          completedAt: Date.now(),
+        });
+        stopExecutionPoller(item.tfsId);
+        setAutomationState(item.tfsId, {
+          status: "failed",
+          stage: "implementing",
+          subStage: "plan-exec",
+          sessionId,
+          blockedReason: entry.message.content,
+          updatedAt: Date.now(),
+        });
+        void handleExecutionCompleted(item.tfsId);
+        continue;
+      }
+
+      if (entry.completed) {
+        const current = planExecutionStore.getExecution(item.tfsId);
+        const completionAt = Date.now();
+        const baseResult = executionResultParser.parse(current?.messages ?? enriched.map((entry) => entry.message));
+        const startedAt = current?.startedAt ?? baseResult.startedAt;
+        const durationMs =
+          startedAt != null ? Math.max(0, completionAt - startedAt) : baseResult.durationMs;
+        const result: ExecutionResult = {
+          ...baseResult,
+          startedAt,
+          completedAt: completionAt,
+          durationMs,
+        };
+        planExecutionStore.updateExecution(item.tfsId, {
+          status: "completed",
+          completedAt: completionAt,
+          result,
+        });
+        scheduleArchiveTimeout(item.tfsId);
+      }
+    }
+  };
+
+  const startExecutionPoller = (item: TaskCenterItem, sessionId: string) => {
+    const poller = new SessionPoller({
+      sessionId,
+      getMessages: (id) => sessionManager.getSessionMessages(id) as Promise<SessionMessage[]>,
+      onMessages: (messages) => handleExecutionMessages(item, sessionId, messages),
+      onError: (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const count = (executionErrorCounts.get(item.tfsId) ?? 0) + 1;
+        executionErrorCounts.set(item.tfsId, count);
+
+        if (count < 3) {
+          poller.pause();
+          planExecutionStore.updateExecution(item.tfsId, {
+            status: "waiting",
+            error: `网络错误，稍后重试（${count}/3）：${message}`,
+            paused: true,
+          });
+          setAutomationState(item.tfsId, {
+            status: "progress",
+            stage: "implementing",
+            subStage: "plan-exec",
+            sessionId,
+            blockedReason: "网络错误，正在重试",
+            updatedAt: Date.now(),
+          });
+
+          const existingTimeout = executionRetryTimeouts.get(item.tfsId);
+          if (existingTimeout) window.clearTimeout(existingTimeout);
+          const timeoutId = window.setTimeout(() => {
+            planExecutionStore.updateExecution(item.tfsId, {
+              status: "running",
+              error: null,
+              paused: false,
+            });
+            poller.resume();
+          }, 3000);
+          executionRetryTimeouts.set(item.tfsId, timeoutId);
+          return;
+        }
+
+        planExecutionStore.updateExecution(item.tfsId, {
+          status: "failed",
+          error: `网络错误重试失败：${message}`,
+          completedAt: Date.now(),
+        });
+        console.error("[TaskCenter] Polling failed", { tfsId: item.tfsId, error: message });
+        setAutomationState(item.tfsId, {
+          status: "failed",
+          stage: "implementing",
+          subStage: "plan-exec",
+          sessionId,
+          blockedReason: message,
+          updatedAt: Date.now(),
+        });
+        stopExecutionPoller(item.tfsId);
+      },
+    });
+    executionPollers.set(item.tfsId, poller);
+    poller.start();
+  };
+
+  const startPlanExecution = async (item: TaskCenterItem, overrides?: Partial<ExecutionOptions>) => {
+    const activeClient = options.client();
+    if (!activeClient) {
+      const reason = "OpenCode 客户端未连接，无法执行计划";
+      setError(reason);
+      markFatalExecutionError(item.tfsId, reason);
+      return false;
+    }
+
+    setPlanExecutionPanelOpen(true);
+    setPlanExecutionItemId(item.tfsId);
+    setSelectedItem(item);
+    setError(null);
+
+    try {
+      const existing = planExecutionStore.getExecution(item.tfsId);
+      if (existing && (existing.status === "running" || existing.status === "waiting")) {
+        return true;
+      }
+
+      const planDocs = await readPlanDocs(item.tfsId);
+      const validation = planDocsValidator.validate(planDocs);
+      if (!validation.ok || !planDocs) {
+        setError(validation.message);
+        markFatalExecutionError(item.tfsId, validation.message);
+        return false;
+      }
+
+      const artifact = await readArtifact(item.tfsId);
+      const selectedRepos = artifact?.selectedRepos ?? [];
+      if (selectedRepos.length === 0) {
+        const reason = "未识别到目标仓库，请先完成需求分析或生成计划";
+        setError(reason);
+        markFatalExecutionError(item.tfsId, reason);
+        return false;
+      }
+
+      const managerOptions = getWorkspaceManagerOptions();
+      if (!managerOptions) {
+        const reason = "工作区管理不可用，请在桌面端选择或创建工作区";
+        setError(reason);
+        markFatalExecutionError(item.tfsId, reason);
+        return false;
+      }
+
+      const workspaceResult = await getOrCreateWorkspace(item.tfsId, selectedRepos, managerOptions);
+      if (!workspaceResult.success || !workspaceResult.workspace) {
+        const reason = workspaceResult.error ?? "未匹配到对应工作区，请先创建或选择工作区";
+        setError(reason);
+        markFatalExecutionError(item.tfsId, reason);
+        return false;
+      }
+
+      const context = buildExecutionContext(
+        item,
+        planDocs,
+        selectedRepos,
+        workspaceResult.workspace.workspaceRoot,
+        overrides
+      );
+      const prompt = new ExecutionPromptBuilder(context).build(overrides);
+
+      const sessionId = await sessionManager.createExecutionSession();
+      planExecutionStore.setExecution(item.tfsId, {
+        tfsId: item.tfsId,
+        status: "running",
+        sessionId,
+        workspaceRoot: workspaceResult.workspace.workspaceRoot,
+        messages: [],
+        progress: { status: "running", updatedAt: Date.now() },
+        startedAt: Date.now(),
+        syncError: null,
+        updatedAt: Date.now(),
+      });
+      executionErrorCounts.set(item.tfsId, 0);
+
+      setAutomationState(item.tfsId, {
+        status: "progress",
+        stage: "implementing",
+        subStage: "plan-exec",
+        sessionId,
+        blockedReason: null,
+        updatedAt: Date.now(),
+      });
+
+      const tfsConfig = getTfsConfig();
+      if (tfsConfig) {
+        try {
+          const tfsSync = new TFSSyncManager(new TFSClient(tfsConfig));
+          await tfsSync.syncExecutionStart(item.tfsId);
+        } catch (error) {
+          console.warn("[TaskCenter] Failed to sync execution start", error);
+        }
+      }
+
+      await sessionManager.startExecutionPrompt(sessionId, prompt, {
+        model: options.getSelectedModel?.() ?? undefined,
+      });
+
+      startExecutionPoller(item, sessionId);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      markFatalExecutionError(item.tfsId, `执行启动失败: ${message}`);
+      return false;
+    }
+  };
+
+  const pausePlanExecution = (tfsId: number) => {
+    const poller = executionPollers.get(tfsId);
+    poller?.pause();
+    planExecutionStore.updateExecution(tfsId, { paused: true, status: "waiting" });
+  };
+
+  const resumePlanExecution = (tfsId: number) => {
+    const poller = executionPollers.get(tfsId);
+    poller?.resume();
+    planExecutionStore.updateExecution(tfsId, { paused: false, status: "running" });
+  };
+
+  const cancelPlanExecution = (tfsId: number) => {
+    const state = planExecutionStore.getExecution(tfsId);
+    stopExecutionPoller(tfsId);
+    planExecutionStore.updateExecution(tfsId, {
+      status: "failed",
+      error: "用户取消执行",
+      completedAt: Date.now(),
+    });
+    if (state?.sessionId) {
+      void sessionManager.closeSession(state.sessionId);
+    }
+    setAutomationState(tfsId, {
+      status: "failed",
+      stage: "implementing",
+      subStage: "plan-exec",
+      sessionId: state?.sessionId ?? null,
+      blockedReason: "用户取消执行",
+      updatedAt: Date.now(),
+    });
+    void handleExecutionCompleted(tfsId);
+  };
+
+  const answerPlanQuestion = async (tfsId: number, answer: string) => {
+    const state = planExecutionStore.getExecution(tfsId);
+    if (!state?.sessionId) return;
+    try {
+      await sessionManager.startExecutionPrompt(state.sessionId, answer, {
+        model: options.getSelectedModel?.() ?? undefined,
+      });
+      planExecutionStore.setQuestion(tfsId, null);
+      resumePlanExecution(tfsId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      markFatalExecutionError(tfsId, `提问回复失败: ${message}`, state.sessionId);
+    }
+  };
+
 
 
   // Task execution functions
+  const planDocsValidator = new PlanDocsValidator();
   const selectItem = (item: TaskCenterItem | null) => {
     setSelectedItem(item);
     if (item) {
@@ -3099,13 +3600,20 @@ export function createTaskCenterStore(options: {
     }
   };
 
-  type TaskSource = { source: "artifact"; content: string };
+  type TaskSource = { source: "artifact"; content: string; docs: TaskCenterPlanDocs };
 
   const resolveTasksSource = async (item: TaskCenterItem): Promise<TaskSource | null> => {
     const docs = await readPlanDocs(item.tfsId);
-    if (docs?.tasks) {
-      return { source: "artifact", content: docs.tasks };
+    const validation = planDocsValidator.validate(docs);
+    if (!validation.ok) {
+      setError(validation.message);
+      return null;
     }
+    setError(null);
+    if (docs?.tasks) {
+      return { source: "artifact", content: docs.tasks, docs };
+    }
+    setError("未找到计划文档，请先生成执行计划");
     return null;
   };
 
@@ -3147,8 +3655,28 @@ export function createTaskCenterStore(options: {
     try {
       const source = await resolveTasksSource(item);
       if (!source) {
-        throw new Error("Tasks not found");
+        return;
       }
+
+      const artifact = await readArtifact(item.tfsId);
+      const selectedRepos = artifact?.selectedRepos ?? [];
+      if (selectedRepos.length === 0) {
+        setError("未识别到目标仓库，请先完成需求分析或生成计划");
+        return;
+      }
+
+      const managerOptions = getWorkspaceManagerOptions();
+      if (!managerOptions) {
+        setError("工作区管理不可用，请在桌面端选择或创建工作区");
+        return;
+      }
+
+      const workspaceResult = await getOrCreateWorkspace(item.tfsId, selectedRepos, managerOptions);
+      if (!workspaceResult.success || !workspaceResult.workspace) {
+        setError(workspaceResult.error ?? "未匹配到对应工作区，请先创建或选择工作区");
+        return;
+      }
+      const workspaceRoot = workspaceResult.workspace.workspaceRoot;
 
       const updated = updateTaskStatus(source.content, taskIndex, "in-progress");
       await updatePlanTasksContent(item.tfsId, updated);
@@ -3167,7 +3695,8 @@ export function createTaskCenterStore(options: {
 
       const task = parsed[taskIndex];
       if (task) {
-        const prompt = `执行任务 ${taskIndex + 1}：${task.title}\n\n工作项: #${item.tfsId}\n\n${task.description}`;
+        const trackPath = getTrackPath(item.tfsId);
+        const prompt = `执行任务 ${taskIndex + 1}：${task.title}\n\n工作项: #${item.tfsId}\n工作区: ${workspaceRoot}\n计划路径: ${trackPath}\n\n${task.description}`;
         options.setPrompt(prompt);
         options.createSessionAndOpen();
       }
@@ -3189,7 +3718,7 @@ export function createTaskCenterStore(options: {
     try {
       const source = await resolveTasksSource(item);
       if (!source) {
-        throw new Error("Tasks not found");
+        return;
       }
 
       const updated = updateTaskStatus(source.content, taskIndex, "completed");
@@ -3270,6 +3799,16 @@ export function createTaskCenterStore(options: {
     loadTasks,
     showTaskPanel,
     setShowTaskPanel,
+    planExecutionState,
+    planExecutionPanelOpen,
+    setPlanExecutionPanelOpen,
+    planExecutionItemId,
+    setPlanExecutionItemId,
+    startPlanExecution,
+    pausePlanExecution,
+    resumePlanExecution,
+    cancelPlanExecution,
+    answerPlanQuestion,
     // Requirement Analysis Wizard
     wizard,
     wizardActions,

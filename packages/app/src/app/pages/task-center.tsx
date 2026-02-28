@@ -2,6 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "so
 
 import type { TaskCenterItem, TaskCenterStatus, TaskCenterStage } from "../types";
 import type { ParsedTask } from "../lib/tasks-parser";
+import type { PlanExecutionState } from "../context/plan-execution";
 import type {
   ParsedRequirement,
   RepositoryMatch,
@@ -17,6 +18,7 @@ import { usePlatform } from "../context/platform";
 import { currentLocale, t } from "../../i18n";
 import RequirementWizard from "../components/requirement-wizard";
 import AnalysisStatusBadge from "../components/task-card/AnalysisStatusBadge";
+import PlanExecutionMonitor from "../components/plan-execution-monitor";
 
 import Button from "../components/button";
 import {
@@ -90,6 +92,16 @@ export type TaskCenterViewProps = {
   onSelectItem?: (item: TaskCenterItem | null) => void;
   onExecuteTask?: (item: TaskCenterItem, taskIndex: number) => void;
   onCompleteTask?: (item: TaskCenterItem, taskIndex: number) => void;
+  planExecutionState?: { executions: Record<number, PlanExecutionState> };
+  planExecutionPanelOpen?: boolean;
+  planExecutionItemId?: number | null;
+  setPlanExecutionPanelOpen?: (open: boolean) => void;
+  setPlanExecutionItemId?: (id: number | null) => void;
+  onStartPlanExecution?: (item: TaskCenterItem) => void;
+  onPausePlanExecution?: (tfsId: number) => void;
+  onResumePlanExecution?: (tfsId: number) => void;
+  onCancelPlanExecution?: (tfsId: number) => void;
+  onAnswerPlanQuestion?: (tfsId: number, answer: string) => void | Promise<void>;
   // Requirement Analysis Wizard props
   wizard?: PlanWizardState;
   wizardActions?: {
@@ -340,6 +352,20 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
     props.onSelectItem?.(item);
   };
 
+  const executionItemId = createMemo(() => props.planExecutionItemId ?? selectedItem()?.tfsId ?? null);
+  const executionItem = createMemo(() => {
+    const id = executionItemId();
+    if (!id) return selectedItem();
+    if (selectedItem() && selectedItem()!.tfsId === id) return selectedItem();
+    const allItems = Object.values(props.itemsByStatus ?? {}).flat();
+    return allItems.find((entry) => entry.tfsId === id) ?? selectedItem();
+  });
+  const executionState = createMemo(() => {
+    const id = executionItemId();
+    if (!id) return null;
+    return props.planExecutionState?.executions?.[id] ?? null;
+  });
+
   createEffect(() => {
     if (!props.clientConnected) return;
     if (typeof window === "undefined") return;
@@ -365,6 +391,16 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
       setShowTaskPanel(true);
       props.startAutomation(item);
     }
+  };
+
+  const handleOpenExecution = (item: TaskCenterItem) => {
+    props.setPlanExecutionItemId?.(item.tfsId);
+    props.setPlanExecutionPanelOpen?.(true);
+  };
+
+  const handleStartPlanExecution = (item: TaskCenterItem) => {
+    handleOpenExecution(item);
+    props.onStartPlanExecution?.(item);
   };
 
   const handleClosePanel = () => {
@@ -662,13 +698,19 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                     <ExternalLink size={12} />
                                     {translate("task_center.view_plan")}
                                   </Button>
+                                  <Show when={props.planExecutionState?.executions?.[item.tfsId]}>
+                                    <Button
+                                      variant="outline"
+                                      class="h-8 px-3 text-xs"
+                                      onClick={() => handleOpenExecution(item)}
+                                    >
+                                      执行监控
+                                    </Button>
+                                  </Show>
                                   <Button
                                     variant="primary"
                                     class="h-8 px-3 text-xs"
-                                    onClick={() => {
-                                      // TODO: 开始开发逻辑
-                                      console.log('开始开发:', item.tfsId);
-                                    }}
+                                    onClick={() => handleStartPlanExecution(item)}
                                   >
                                     <Play size={12} />
                                     开始开发
@@ -689,13 +731,19 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                   <ExternalLink size={12} />
                                   {translate("task_center.view_plan")}
                                 </Button>
+                                <Show when={props.planExecutionState?.executions?.[item.tfsId]}>
+                                  <Button
+                                    variant="outline"
+                                    class="h-8 px-3 text-xs"
+                                    onClick={() => handleOpenExecution(item)}
+                                  >
+                                    执行监控
+                                  </Button>
+                                </Show>
                                 <Button
                                   variant="primary"
                                   class="h-8 px-3 text-xs"
-                                  onClick={() => {
-                                    // TODO: 开始开发逻辑
-                                    console.log('开始开发:', item.tfsId);
-                                  }}
+                                  onClick={() => handleStartPlanExecution(item)}
                                 >
                                   <Play size={12} />
                                   开始开发
@@ -729,6 +777,18 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
       </div>
       </div>
       </div>
+      <Show when={props.planExecutionPanelOpen && executionItem() && executionState()}>
+        <PlanExecutionMonitor
+          open={Boolean(props.planExecutionPanelOpen)}
+          item={executionItem()!}
+          state={executionState()!}
+          onClose={() => props.setPlanExecutionPanelOpen?.(false)}
+          onPause={() => executionItemId() && props.onPausePlanExecution?.(executionItemId()!)}
+          onResume={() => executionItemId() && props.onResumePlanExecution?.(executionItemId()!)}
+          onCancel={() => executionItemId() && props.onCancelPlanExecution?.(executionItemId()!)}
+          onAnswerQuestion={(answer) => executionItemId() && props.onAnswerPlanQuestion?.(executionItemId()!, answer)}
+        />
+      </Show>
     </section>
 
   );
