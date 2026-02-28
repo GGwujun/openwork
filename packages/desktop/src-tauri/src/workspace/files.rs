@@ -2,12 +2,15 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use std::env;
 
 use zip::ZipArchive;
 
 use crate::types::{OpencodeCommand, WorkspaceOpenworkConfig};
 use crate::utils::now_ms;
 use crate::workspace::commands::{sanitize_command_name, serialize_command_frontmatter};
+use tauri::Manager;
+use walkdir::WalkDir;
 
 pub fn merge_plugins(existing: Vec<String>, required: &[&str]) -> Vec<String> {
     let mut out = existing;
@@ -277,6 +280,79 @@ fn seed_enterprise_creator_skills(root: &PathBuf, skill_root: &PathBuf) -> Resul
     Ok(())
 }
 
+fn resolve_skill_source(app: &tauri::AppHandle, skill_name: &str) -> Option<PathBuf> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let candidate = resource_dir.join("skills").join(skill_name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+
+        let legacy = resource_dir
+            .join(".opencode")
+            .join("skills")
+            .join(skill_name);
+        if legacy.exists() {
+            return Some(legacy);
+        }
+    }
+
+    if let Ok(cwd) = env::current_dir() {
+        let candidates = [
+            cwd.join("resources").join("skills").join(skill_name),
+            cwd.join("src-tauri").join("resources").join("skills").join(skill_name),
+            cwd.join(".opencode").join("skills").join(skill_name),
+        ];
+
+        for candidate in candidates {
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+fn seed_skill_tree(app: &tauri::AppHandle, skill_root: &PathBuf, skill_name: &str) -> Result<(), String> {
+    let Some(source_root) = resolve_skill_source(app, skill_name) else {
+        println!("[workspace] Skill source not found; skipping seed: {skill_name}");
+        return Ok(());
+    };
+
+    let dest_root = skill_root.join(skill_name);
+    fs::create_dir_all(&dest_root)
+        .map_err(|e| format!("Failed to create skills dir {}: {e}", dest_root.display()))?;
+
+    for entry in WalkDir::new(&source_root).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let relative = match path.strip_prefix(&source_root) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+
+        let dest_path = dest_root.join(relative);
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&dest_path)
+                .map_err(|e| format!("Failed to create {}: {e}", dest_path.display()))?;
+            continue;
+        }
+
+        if dest_path.exists() {
+            continue;
+        }
+
+        if let Some(parent) = dest_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+        }
+
+        fs::copy(path, &dest_path)
+            .map_err(|e| format!("Failed to copy {} to {}: {e}", path.display(), dest_path.display()))?;
+    }
+
+    Ok(())
+}
+
 fn seed_commands(commands_dir: &PathBuf, preset: &str) -> Result<(), String> {
     if fs::read_dir(commands_dir)
         .map_err(|e| format!("Failed to read {}: {e}", commands_dir.display()))?
@@ -343,13 +419,15 @@ fn seed_commands(commands_dir: &PathBuf, preset: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn ensure_workspace_files(workspace_path: &str, preset: &str) -> Result<(), String> {
+pub fn ensure_workspace_files(app: &tauri::AppHandle, workspace_path: &str, preset: &str) -> Result<(), String> {
     let root = PathBuf::from(workspace_path);
 
     let skill_root = root.join(".opencode").join("skills");
     fs::create_dir_all(&skill_root)
         .map_err(|e| format!("Failed to create .opencode/skills: {e}"))?;
     seed_workspace_guide(&skill_root)?;
+    seed_skill_tree(app, &skill_root, "forge")?;
+    seed_skill_tree(app, &skill_root, "skill-creator")?;
     if preset == "starter" {
         seed_get_started_skill(&skill_root)?;
         if let Err(err) = seed_enterprise_creator_skills(&root, &skill_root) {

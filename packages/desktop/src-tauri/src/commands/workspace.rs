@@ -29,7 +29,7 @@ pub fn workspace_bootstrap(
     let mut state = load_workspace_state(&app)?;
 
     let starter = ensure_starter_workspace(&app)?;
-    ensure_workspace_files(&starter.path, &starter.preset)?;
+    ensure_workspace_files(&app, &starter.path, &starter.preset)?;
 
     if !state.workspaces.iter().any(|w| w.id == starter.id) {
         state.workspaces.push(starter.clone());
@@ -83,7 +83,7 @@ pub fn workspace_forget(
 
     if state.workspaces.is_empty() {
         let starter = ensure_starter_workspace(&app)?;
-        ensure_workspace_files(&starter.path, &starter.preset)?;
+        ensure_workspace_files(&app, &starter.path, &starter.preset)?;
         state.active_id = starter.id.clone();
         state.workspaces.push(starter);
     }
@@ -194,7 +194,7 @@ pub fn workspace_create(
 
     let id = stable_workspace_id(&folder);
 
-    ensure_workspace_files(&folder, &preset)?;
+    ensure_workspace_files(&app, &folder, &preset)?;
 
     let mut state = load_workspace_state(&app)?;
 
