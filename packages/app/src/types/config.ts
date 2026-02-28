@@ -85,3 +85,92 @@ export const subscribeAutoAnalysisConfig = (listener: (config: AutoAnalysisConfi
   listeners.add(listener);
   return () => listeners.delete(listener);
 };
+
+
+// ========== TFS Configuration ==========
+
+export interface TFSUserConfig {
+  serverUrl: string;
+  pat: string;
+  username: string | null;
+}
+
+export const DEFAULT_TFS_USER_CONFIG: TFSUserConfig = {
+  serverUrl: "http://tfs2018-web.winning.com.cn:8080/tfs/WINNING-6.0",
+  pat: "",
+  username: null,
+};
+
+const TFS_CONFIG_KEY = "openwork.tfsConfig";
+const tfsListeners = new Set<(config: TFSUserConfig) => void>();
+
+export const validateTfsUserConfig = (value: Partial<TFSUserConfig>): TFSUserConfig => {
+  return {
+    serverUrl: value.serverUrl ?? DEFAULT_TFS_USER_CONFIG.serverUrl,
+    pat: value.pat ?? DEFAULT_TFS_USER_CONFIG.pat,
+    username: value.username ?? DEFAULT_TFS_USER_CONFIG.username,
+  };
+};
+
+export const getTfsUserConfig = (): TFSUserConfig => {
+  console.log('[Config] [DEBUG] getTfsUserConfig called');
+  
+  if (typeof window === "undefined") {
+    console.log('[Config] [DEBUG] window undefined, returning default');
+    return DEFAULT_TFS_USER_CONFIG;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(TFS_CONFIG_KEY);
+    console.log('[Config] [DEBUG] raw from localStorage:', raw ? 'found' : 'not found');
+    if (!raw) {
+      console.log('[Config] [DEBUG] no config in localStorage, returning default');
+      return DEFAULT_TFS_USER_CONFIG;
+    }
+    const parsed = JSON.parse(raw) as Partial<TFSUserConfig>;
+    console.log('[Config] [DEBUG] parsed config:', {
+      serverUrl: parsed.serverUrl,
+      hasPat: !!parsed.pat,
+      patLength: parsed.pat?.length,
+      username: parsed.username
+    });
+    return validateTfsUserConfig(parsed);
+  } catch (error) {
+    console.error('[Config] [DEBUG] error parsing config:', error);
+    return DEFAULT_TFS_USER_CONFIG;
+  }
+};
+
+export const setTfsUserConfig = (patch: Partial<TFSUserConfig>): TFSUserConfig => {
+  const current = getTfsUserConfig();
+  const next = validateTfsUserConfig({ ...current, ...patch });
+  
+  console.log('[Config] [DEBUG] setTfsUserConfig: saving config:', {
+    serverUrl: next.serverUrl,
+    hasPat: !!next.pat,
+    patLength: next.pat?.length,
+    username: next.username
+  });
+
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(TFS_CONFIG_KEY, JSON.stringify(next));
+      console.log('[Config] [DEBUG] setTfsUserConfig: saved to localStorage successfully');
+    } catch (error) {
+      console.error('[Config] [DEBUG] setTfsUserConfig: error saving to localStorage:', error);
+    }
+  }
+
+  tfsListeners.forEach((listener) => listener(next));
+  return next;
+};
+
+export const subscribeTfsUserConfig = (listener: (config: TFSUserConfig) => void) => {
+  tfsListeners.add(listener);
+  return () => tfsListeners.delete(listener);
+};
+
+export const hasValidTfsConfig = (): boolean => {
+  const config = getTfsUserConfig();
+  return !!config.pat && config.pat.length > 0;
+};
