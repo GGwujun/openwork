@@ -5,6 +5,7 @@ import { LANGUAGE_OPTIONS, t, type Language } from "../../i18n";
 
 import Button from "../components/button";
 import AutoAnalysisSettings from "../components/settings/AutoAnalysisSettings";
+import TfsSettings from "../components/settings/TfsSettings";
 import { HardDrive, MessageCircle, PlugZap, RefreshCcw, Shield, Smartphone, X } from "lucide-solid";
 import type { OpencodeConnectStatus, ProviderListItem, SettingsTab, StartupPreference } from "../types";
 import type {
@@ -673,7 +674,9 @@ export default function SettingsView(props: SettingsViewProps) {
               </div>
             </div>
 
-            <AutoAnalysisSettings />
+<AutoAnalysisSettings />
+
+            <TfsSettings />
 
             <div class="bg-gray-2/30 border border-gray-6/50 rounded-2xl p-5 space-y-4">
               <div>
