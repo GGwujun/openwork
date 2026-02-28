@@ -435,8 +435,7 @@ function formatPlanDescription(
 
   // 完整文档链接
   parts.push('## 🔗 完整文档');
-  parts.push(`本地文档路径: \`${workspaceRoot}/forge/tracks/tfs-${tfsId}/\``);
-  parts.push('完整内容已同步到任务描述中，超长内容会追加到评论。');
+  parts.push('文档已保存在 OpenWork 本地存储，并同步到任务描述与评论。');
   parts.push('');
   parts.push('- **intent.md** - 开发意图完整文档');
   parts.push('- **design.md** - 技术设计完整文档');
@@ -500,7 +499,7 @@ async function appendPlanDocsAsComments(
 
   const header = [
     '## 📌 完整文档内容（自动同步）',
-    `来源路径: ${workspaceRoot}/forge/tracks/tfs-${tfsId}/`,
+    '来源: OpenWork 本地存储',
     '如果内容过长，将分段写入评论。',
     '',
   ].join('\n');
