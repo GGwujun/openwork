@@ -11,46 +11,13 @@
 
 import type { RepositoryMatch } from '../../types/requirement-analyzer';
 import type { WorkspaceInfo as TauriWorkspaceInfo } from '../../app/lib/tauri';
+import type {
+  ResolvedWorkspace,
+  WorkspaceManagerOptions,
+  WorkspaceMapEntry,
+} from './types';
+export type { ResolvedWorkspace, WorkspaceManagerOptions, WorkspaceMapEntry } from './types';
 
-/**
- * 工作空间条目（从 task-center.ts 导入）
- */
-export interface WorkspaceMapEntry {
-  workspaceId: string;
-  workspaceRoot?: string;
-  repoUrlKey?: string;
-  repoPathKey?: string;
-  updatedAt: number;
-}
-
-/**
- * 工作空间信息
- */
-export interface ResolvedWorkspace {
-  workspaceId: string;
-  workspaceRoot: string;
-  isNewlyCreated: boolean;
-  isActivated: boolean;
-}
-
-/**
- * 工作空间管理器选项
- */
-export interface WorkspaceManagerOptions {
-  // 工作区相关函数
-  getWorkspaces: () => TauriWorkspaceInfo[];
-  createWorkspaceForRepo: (input: {
-    repoUrl?: string | null;
-    folderPath?: string | null;
-    preset?: "starter" | "automation" | "minimal";
-  }) => Promise<TauriWorkspaceInfo | null>;
-  activateWorkspace: (workspaceId: string) => Promise<boolean>;
-  getActiveWorkspaceRoot: () => string;
-  
-  // 存储相关
-  getWorkspaceMap: () => Record<number, WorkspaceMapEntry>;
-  setWorkspaceMapEntry: (tfsId: number, entry: WorkspaceMapEntry) => void;
-}
 
 /**
  * 获取或创建工作空间
@@ -82,49 +49,66 @@ export async function getOrCreateWorkspace(
 
     // 验证工作空间是否仍然存在
     const allWorkspaces = options.getWorkspaces();
-    const workspaceExists = allWorkspaces.some(ws => ws.id === existingEntry.workspaceId);
+    const matchedWorkspace = allWorkspaces.find(ws => ws.id === existingEntry.workspaceId) ?? null;
 
-    if (workspaceExists && existingEntry.workspaceRoot) {
-      console.log(`[WorkspaceManager] 工作空间有效，直接使用`);
-      
-      // 确保工作区已激活
-      const currentRoot = options.getActiveWorkspaceRoot();
-      const isAlreadyActive = currentRoot === existingEntry.workspaceRoot;
-      
-      if (!isAlreadyActive) {
-        console.log(`[WorkspaceManager] 激活工作空间:`, existingEntry.workspaceId);
-        const activated = await options.activateWorkspace(existingEntry.workspaceId);
-        if (!activated) {
-          console.warn(`[WorkspaceManager] 激活失败，尝试重新匹配`);
-          // 继续执行匹配流程
+    if (matchedWorkspace) {
+      const actualRoot = resolveWorkspaceRoot(matchedWorkspace);
+      const entryRoot = existingEntry.workspaceRoot || actualRoot;
+      const actualRootKey = normalizePathValue(actualRoot).toLowerCase();
+      const entryRootKey = normalizePathValue(entryRoot).toLowerCase();
+
+      if (actualRootKey && entryRootKey && actualRootKey === entryRootKey) {
+        console.log(`[WorkspaceManager] 工作空间有效，直接使用`);
+
+        const currentRoot = normalizePathValue(options.getActiveWorkspaceRoot()).toLowerCase();
+        const isAlreadyActive = currentRoot && currentRoot === actualRootKey;
+
+        if (!isAlreadyActive) {
+          console.log(`[WorkspaceManager] 激活工作空间:`, existingEntry.workspaceId);
+          const activated = await options.activateWorkspace(existingEntry.workspaceId);
+          if (!activated) {
+            console.warn(`[WorkspaceManager] 激活失败，尝试重新匹配`);
+            // 继续执行匹配流程
+          } else {
+            options.setWorkspaceMapEntry(tfsId, {
+              ...existingEntry,
+              workspaceRoot: actualRoot,
+              updatedAt: Date.now()
+            });
+
+            return {
+              success: true,
+              workspace: {
+                workspaceId: existingEntry.workspaceId,
+                workspaceRoot: actualRoot,
+                isNewlyCreated: false,
+                isActivated: true
+              }
+            };
+          }
         } else {
-          // 更新记录时间
+          console.log(`[WorkspaceManager] 工作空间已经是当前活动状态`);
           options.setWorkspaceMapEntry(tfsId, {
             ...existingEntry,
+            workspaceRoot: actualRoot,
             updatedAt: Date.now()
           });
-          
           return {
             success: true,
             workspace: {
               workspaceId: existingEntry.workspaceId,
-              workspaceRoot: existingEntry.workspaceRoot,
+              workspaceRoot: actualRoot,
               isNewlyCreated: false,
               isActivated: true
             }
           };
         }
       } else {
-        console.log(`[WorkspaceManager] 工作空间已经是当前活动状态`);
-        return {
-          success: true,
-          workspace: {
-            workspaceId: existingEntry.workspaceId,
-            workspaceRoot: existingEntry.workspaceRoot,
-            isNewlyCreated: false,
-            isActivated: true
-          }
-        };
+        console.warn(`[WorkspaceManager] 记录的工作空间路径不一致，重新匹配`, {
+          workspaceId: existingEntry.workspaceId,
+          entryRoot,
+          actualRoot
+        });
       }
     } else {
       console.warn(`[WorkspaceManager] 记录的工作空间已失效，清理记录:`, existingEntry.workspaceId);
@@ -143,13 +127,13 @@ export async function getOrCreateWorkspace(
     };
   }
 
-  const matchedWorkspace = await matchExistingWorkspace(primaryRepo, options);
+  const matchResult = await matchExistingWorkspace(primaryRepo, options);
   
-  if (matchedWorkspace) {
-    console.log(`[WorkspaceManager] 匹配到现有工作区:`, matchedWorkspace.id);
+  if (matchResult.workspace) {
+    console.log(`[WorkspaceManager] 匹配到现有工作区:`, matchResult.workspace.id);
     
     // 激活工作区
-    const activated = await options.activateWorkspace(matchedWorkspace.id);
+    const activated = await options.activateWorkspace(matchResult.workspace.id);
     if (!activated) {
       return {
         success: false,
@@ -158,25 +142,32 @@ export async function getOrCreateWorkspace(
     }
 
     // 记录映射关系
-    const workspaceRoot = resolveWorkspaceRoot(matchedWorkspace);
+    const workspaceRoot = resolveWorkspaceRoot(matchResult.workspace);
     const entry: WorkspaceMapEntry = {
-      workspaceId: matchedWorkspace.id,
+      workspaceId: matchResult.workspace.id,
       workspaceRoot,
       repoUrlKey: normalizeGitRemote(primaryRepo.path),
       repoPathKey: normalizePathValue(primaryRepo.path).toLowerCase(),
       updatedAt: Date.now()
     };
     options.setWorkspaceMapEntry(tfsId, entry);
-    console.log(`[WorkspaceManager] 已记录映射关系:`, { tfsId, workspaceId: matchedWorkspace.id });
+    console.log(`[WorkspaceManager] 已记录映射关系:`, { tfsId, workspaceId: matchResult.workspace.id });
 
     return {
       success: true,
       workspace: {
-        workspaceId: matchedWorkspace.id,
+        workspaceId: matchResult.workspace.id,
         workspaceRoot,
         isNewlyCreated: false,
         isActivated: true
       }
+    };
+  }
+
+  if (matchResult.isAmbiguous) {
+    return {
+      success: false,
+      error: matchResult.reason ?? "匹配到多个工作区，请手动选择"
     };
   }
 
@@ -235,15 +226,21 @@ export async function getOrCreateWorkspace(
 /**
  * 匹配现有工作区
  */
+type WorkspaceMatchResult = {
+  workspace: TauriWorkspaceInfo | null;
+  reason?: string;
+  isAmbiguous?: boolean;
+};
+
 async function matchExistingWorkspace(
   repo: RepositoryMatch,
   options: WorkspaceManagerOptions
-): Promise<TauriWorkspaceInfo | null> {
+): Promise<WorkspaceMatchResult> {
   const allWorkspaces = options.getWorkspaces();
   const localWorkspaces = allWorkspaces.filter(ws => ws.workspaceType !== "remote");
 
   if (localWorkspaces.length === 0) {
-    return null;
+    return { workspace: null };
   }
 
   const repoUrlKey = normalizeGitRemote(repo.path);
@@ -251,25 +248,37 @@ async function matchExistingWorkspace(
 
   // 方法1: 通过 Git URL 匹配
   if (repoUrlKey) {
+    const reader = options.readWorkspaceOriginUrl ?? readWorkspaceOriginUrl;
+    const urlMatches: TauriWorkspaceInfo[] = [];
     for (const workspace of localWorkspaces) {
       const root = resolveWorkspaceRoot(workspace);
-      const originUrl = await readWorkspaceOriginUrl(root);
+      const originUrl = await reader(root);
       if (normalizeGitRemote(originUrl) === repoUrlKey) {
-        return workspace;
+        urlMatches.push(workspace);
       }
+    }
+    if (urlMatches.length === 1) {
+      return { workspace: urlMatches[0] };
+    }
+    if (urlMatches.length > 1) {
+      return { workspace: null, reason: "匹配到多个工作区，请手动选择", isAmbiguous: true };
     }
   }
 
   // 方法2: 通过路径匹配
-  for (const workspace of localWorkspaces) {
+  const pathMatches = localWorkspaces.filter((workspace) => {
     const root = resolveWorkspaceRoot(workspace);
     const rootKey = normalizePathValue(root).toLowerCase();
-    if (rootKey === repoPathKey) {
-      return workspace;
-    }
+    return rootKey === repoPathKey;
+  });
+  if (pathMatches.length === 1) {
+    return { workspace: pathMatches[0] };
+  }
+  if (pathMatches.length > 1) {
+    return { workspace: null, reason: "匹配到多个工作区，请手动选择", isAmbiguous: true };
   }
 
-  return null;
+  return { workspace: null };
 }
 
 /**
