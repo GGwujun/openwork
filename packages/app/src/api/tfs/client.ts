@@ -77,6 +77,7 @@ export class TFSClient {
    * 发起 API 请求（普通 GET/POST）
    */
   private async fetchApi<T>(url: string, options: RequestInit = {}): Promise<T> {
+    console.log('[TFSClient] [DEBUG] fetchApi:', options.method || 'GET', url);
     const fetchImpl = isTauriRuntime() ? tauriFetch : fetch;
     let response: Response;
     try {
@@ -87,7 +88,9 @@ export class TFSClient {
           ...options.headers
         }
       });
+      console.log('[TFSClient] [DEBUG] Response status:', response.status, response.statusText);
     } catch (error) {
+      console.error('[TFSClient] [DEBUG] Network error:', error);
       if (!isTauriRuntime() && error instanceof TypeError) {
         throw new Error("浏览器请求被 CORS 拦截，请使用桌面版或配置反向代理");
       }
@@ -96,10 +99,13 @@ export class TFSClient {
 
     if (!response.ok) {
       const errorText = await response.text();
+      console.error('[TFSClient] [DEBUG] API error:', response.status, errorText);
       throw new Error(`TFS API error: ${response.status} ${errorText}`);
     }
 
-    return response.json() as Promise<T>;
+    const data = await response.json() as T;
+    console.log('[TFSClient] [DEBUG] Response data:', JSON.stringify(data).substring(0, 200) + '...');
+    return data;
   }
 
   /**
@@ -112,15 +118,22 @@ export class TFSClient {
     return `${year}-${month}-${day}`;
   }
 
+  private escapeWiqlString(value: string): string {
+    // WIQL 字符串中单引号需要转义为两个单引号
+    return value.replace(/'/g, "''");
+  }
+
   /**
    * 获取分配给自己的查询条件
    */
   private getAssignedToClause(): string {
     if (this.username) {
-      return `[System.AssignedTo] = '${this.username}'`;
+      const safeUsername = this.escapeWiqlString(this.username);
+      return `([System.AssignedTo] = @Me OR [System.AssignedTo] = '${safeUsername}')`;
     }
     return `[System.AssignedTo] = @Me`;
   }
+
 
   /**
    * 按 ID 获取单个工作项
@@ -157,7 +170,10 @@ export class TFSClient {
    */
   async queryWorkItems(wiql: string, project?: string): Promise<WorkItem[]> {
     try {
+      console.log('[TFSClient] [DEBUG] queryWorkItems called with WIQL:', wiql.substring(0, 200) + '...');
       const url = `${this.serverUrl}/_apis/wit/wiql?api-version=4.1${project ? `&project=${encodeURIComponent(project)}` : ''}`;
+      console.log('[TFSClient] [DEBUG] Query URL:', url);
+      
       const result = await this.fetchApi<{
         workItems: Array<{ id: number }>
       }>(url, {
@@ -165,14 +181,17 @@ export class TFSClient {
         body: JSON.stringify({ query: wiql })
       });
 
+      console.log('[TFSClient] [DEBUG] WIQL query returned workItems count:', result.workItems?.length || 0);
+
       if (!result.workItems || result.workItems.length === 0) {
         return [];
       }
 
       const ids = result.workItems.map(wi => wi.id);
+      console.log('[TFSClient] [DEBUG] Fetching details for IDs:', ids.slice(0, 10), ids.length > 10 ? `... and ${ids.length - 10} more` : '');
       return await this.getWorkItems(ids, project);
     } catch (error) {
-      console.error('Error querying work items:', error);
+      console.error('[TFSClient] [DEBUG] Error querying work items:', error);
       throw error;
     }
   }
@@ -210,6 +229,10 @@ export class TFSClient {
       top = 100
     } = options;
 
+    // 安全检查：确保数组不为空
+    const safeStates = states.length > 0 ? states : ['已分析'];
+    const safeWorkItemTypes = workItemTypes.length > 0 ? workItemTypes : ['Task'];
+
     // 构建 WIQL 查询
     let wiql = `
       SELECT [System.Id], [System.Title], [System.State], 
@@ -220,13 +243,13 @@ export class TFSClient {
              [System.AreaPath], [System.IterationPath]
       FROM WorkItems
       WHERE ${this.getAssignedToClause()}
-      AND [System.State] IN (${states.map(s => `'${s}'`).join(', ')})
-      AND [System.WorkItemType] IN (${workItemTypes.map(t => `'${t}'`).join(', ')})
+      AND [System.State] IN (${safeStates.map(s => `'${this.escapeWiqlString(s)}'`).join(', ')})
+      AND [System.WorkItemType] IN (${safeWorkItemTypes.map(t => `'${this.escapeWiqlString(t)}'`).join(', ')})
     `;
 
     // 添加项目过滤
     if (project) {
-      wiql += ` AND [System.TeamProject] = '${project}'`;
+      wiql += ` AND [System.TeamProject] = '${this.escapeWiqlString(project)}'`;
     }
 
     // 添加日期过滤
@@ -238,6 +261,12 @@ export class TFSClient {
     }
 
     wiql += ' ORDER BY [Microsoft.VSTS.Common.Priority], [System.ChangedDate] DESC';
+
+    // 输出完整 WIQL 用于调试
+    console.log('[TFSClient] [DEBUG] Full WIQL query:\n', wiql);
+    console.log('[TFSClient] [DEBUG] WorkItemTypes:', safeWorkItemTypes);
+    console.log('[TFSClient] [DEBUG] States:', safeStates);
+    console.log('[TFSClient] [DEBUG] AssignedToClause:', this.getAssignedToClause());
 
     const workItems = await this.queryWorkItems(wiql, project || undefined);
     return workItems.slice(0, top).map(wi => this.formatWorkItemForTaskCenter(wi));
