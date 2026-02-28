@@ -369,6 +369,9 @@ export class RequirementAnalyzer {
   ): Promise<AIAnalysisResult> {
     const prompt = this.buildAnalysisPrompt(title, content);
     const systemPrompt = '你是一个专业的需求分析师，擅长从需求文档中提取关键信息并以JSON格式输出。';
+
+    console.log('[RequirementAnalyzer] Analysis system prompt:\n' + systemPrompt);
+    console.log('[RequirementAnalyzer] Analysis prompt:\n' + prompt);
     
     try {
       const response = await this.sendPromptToAI(prompt, systemPrompt);
