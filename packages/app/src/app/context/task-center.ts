@@ -30,7 +30,7 @@ import type {
   AnalysisResult,
   AnalysisPriority,
 } from '../../types/requirement-analyzer';
-import { getAutoAnalysisConfig, subscribeAutoAnalysisConfig } from '../../types/config';
+import { getAutoAnalysisConfig, subscribeAutoAnalysisConfig, getTfsUserConfig, subscribeTfsUserConfig, type TFSUserConfig } from '../../types/config';
 
 // AI Generate Plan
 import {
@@ -1555,42 +1555,68 @@ export function createTaskCenterStore(options: {
     console.log('TFS config saved to:', TFS_CONFIG_PATH);
   };
 
-  // Hard-coded config for immediate use (will be overridden by file config when available)
-  const HARDCODED_CONFIG: TFSConfig = {
-    // serverUrl: 'http://tfs2018-web.winning.com.cn:8080/tfs/WINNING-6.0',
-    // pat: 'yxnmy2hwkv4l2ulz7p7zt4b43fotxmsedamak4vfeattcehd5elq',
-    // username: 'WINNING\\g_wj'
-  };
-
   /**
-   * Get valid TFS configuration from store, file, or options
-   * Priority: options > file > persisted storage > hardcoded
+   * Get valid TFS configuration from settings, options, file, or persisted store
+   * Priority: options > settings > file > persisted storage
    */
   const getTfsConfig = (): TFSConfig | null => {
+    console.log('[TaskCenter] [DEBUG] getTfsConfig called');
+    
     // First try from options prop (highest priority)
     if (options.tfsConfig) {
+      console.log('[TaskCenter] [DEBUG] Trying options.tfsConfig...');
       const config = options.tfsConfig();
-      if (config && config.pat) return config;
+      if (config && config.pat) {
+        console.log('[TaskCenter] [DEBUG] Found config in options.tfsConfig');
+        return config;
+      }
+      console.log('[TaskCenter] [DEBUG] options.tfsConfig exists but no pat');
     }
 
-    // Then try from file cache
-    const fromFile = fileConfig();
-    if (fromFile && fromFile.pat) {
-      return fromFile;
-    }
-
-    // Then try from persisted store (tfsConfigState is a Store, not a function)
-    const stored = tfsConfigState;
-    if (stored && stored.pat) {
+    // Then try from Settings (localStorage)
+    console.log('[TaskCenter] [DEBUG] Trying getTfsUserConfig() from localStorage...');
+    const settingsConfig = getTfsUserConfig();
+    console.log('[TaskCenter] [DEBUG] Settings config:', settingsConfig ? {
+      serverUrl: settingsConfig.serverUrl,
+      hasPat: !!settingsConfig.pat,
+      patLength: settingsConfig.pat?.length,
+      username: settingsConfig.username
+    } : 'null');
+    
+    if (settingsConfig && settingsConfig.pat) {
+      console.log('[TaskCenter] [DEBUG] Found config in Settings');
       return {
-        serverUrl: stored.serverUrl,
-        pat: stored.pat,
-        username: stored.username
+        serverUrl: settingsConfig.serverUrl,
+        pat: settingsConfig.pat,
+        username: settingsConfig.username || undefined,
       };
     }
 
-    // Finally use hardcoded config as fallback
-    return HARDCODED_CONFIG;
+    // Then try from file cache
+    console.log('[TaskCenter] [DEBUG] Trying fileConfig...');
+    const fromFile = fileConfig();
+    if (fromFile && fromFile.pat) {
+      console.log('[TaskCenter] [DEBUG] Found config in file cache');
+      return fromFile;
+    }
+    console.log('[TaskCenter] [DEBUG] No file config, fromFile:', fromFile);
+
+    // Then try from persisted store (tfsConfigState is a Store, not a function)
+    console.log('[TaskCenter] [DEBUG] Trying persisted store...');
+    const stored = tfsConfigState;
+    if (stored && stored.pat) {
+      console.log('[TaskCenter] [DEBUG] Found config in persisted store');
+      return {
+        serverUrl: stored.serverUrl,
+        pat: stored.pat,
+        username: stored.username,
+      };
+    }
+    console.log('[TaskCenter] [DEBUG] No persisted config, stored:', stored);
+
+    // No valid config found
+    console.log('[TaskCenter] [DEBUG] No valid TFS config found in any source');
+    return null;
   };
 
   /**
@@ -1782,40 +1808,78 @@ export function createTaskCenterStore(options: {
   };
 
   const syncTasks = async (syncOptions?: { force?: boolean }) => {
-    if (syncing() && !syncOptions?.force) return;
+    console.log('[TaskCenter] [DEBUG] syncTasks called, force:', syncOptions?.force);
+    
+    if (syncing() && !syncOptions?.force) {
+      console.log('[TaskCenter] [DEBUG] Already syncing, skipping');
+      return;
+    }
 
     // Try to load config from file if not already loaded
+    console.log('[TaskCenter] [DEBUG] configLoaded:', configLoaded());
     if (!configLoaded()) {
+      console.log('[TaskCenter] [DEBUG] Loading TFS config from file...');
       await loadTfsConfigFromFile();
+      console.log('[TaskCenter] [DEBUG] File config loaded:', fileConfig());
     }
 
     // Get TFS configuration
+    console.log('[TaskCenter] [DEBUG] Calling getTfsConfig...');
     const config = getTfsConfig();
+    console.log('[TaskCenter] [DEBUG] getTfsConfig result:', config ? {
+      serverUrl: config.serverUrl,
+      hasPat: !!config.pat,
+      patLength: config.pat?.length,
+      username: config.username
+    } : 'null');
+    
     if (!config) {
-      setError(`TFS configuration not found. Please create ${TFS_CONFIG_PATH} with your PAT:\n\n{\n  "serverUrl": "http://tfs2018-web.winning.com.cn:8080/tfs/WINNING-6.0",\n  "pat": "your-pat-token",\n  "username": "WINNING\\\\your-username"\n}`);
+      console.error('[TaskCenter] [DEBUG] No TFS config found!');
+      setError(`TFS configuration not found. Please configure TFS in Settings:\n\n1. Open Settings → General\n2. Find "TFS 配置" section\n3. Enter your PAT token and server URL`);
       setStatus("error");
       return;
     }
 
+    console.log('[TaskCenter] [DEBUG] TFS config found, starting sync...');
     setSyncing(true);
     setStatus("syncing");
     setError(null);
     setSyncSessionId(null);
-
     try {
       // Create TFS client and fetch work items directly
+      console.log('[TaskCenter] [DEBUG] Creating TFSClient with config:', {
+        serverUrl: config.serverUrl,
+        hasPat: !!config.pat,
+        username: config.username
+      });
       const client = new TFSClient(config);
+      console.log('[TaskCenter] [DEBUG] TFSClient created, calling getMyWorkItems...');
+      
       const workItems = await client.getMyWorkItems({
         states: ['已分析'],
         top: 100
       });
+      
+      console.log('[TaskCenter] [DEBUG] getMyWorkItems returned:', workItems.length, 'items');
+      if (workItems.length === 0) {
+        console.log('[TaskCenter] [DEBUG] No work items found. Query params:', {
+          states: ['已分析'],
+          username: config.username,
+          assignedToClause: config.username ? `[System.AssignedTo] = '${config.username}'` : '[System.AssignedTo] = @Me'
+        });
+      } else {
+        console.log('[TaskCenter] [DEBUG] First work item:', {
+          id: workItems[0]?.id,
+          title: workItems[0]?.title,
+          state: workItems[0]?.state
+        });
+      }
 
       // Convert to TaskCenterItem format
       const tfsItems = workItems.map(formatToTaskCenterItem).map((item) => ({
         ...item,
         stage: "idle" as TaskCenterStage,
       }));
-
       // Merge with automation state to preserve items not in TFS query
       const mergedItems = mergeTfsItemsWithAutomation(tfsItems, automationState ?? {}, tfsSyncState);
       setItems(mergedItems);
@@ -1908,10 +1972,13 @@ export function createTaskCenterStore(options: {
       setLastUpdatedAt(Date.now());
       setStatus("idle");
     } catch (error) {
+      console.error('[TaskCenter] [DEBUG] syncTasks error:', error);
       const message = formatSyncError(error);
+      console.error('[TaskCenter] [DEBUG] formatted error:', message);
       setError(message);
       setStatus("error");
     } finally {
+      console.log('[TaskCenter] [DEBUG] syncTasks finished, setting syncing to false');
       setSyncing(false);
     }
   };
