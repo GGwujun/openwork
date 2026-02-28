@@ -3754,6 +3754,9 @@ export default function App() {
     client,
     getSelectedModel: () => defaultModel(),
     activeWorkspaceRoot: () => workspaceStore.activeWorkspaceRoot().trim(),
+    workspaces: () => workspaceStore.workspaces(),
+    activateWorkspace: workspaceStore.activateWorkspace,
+    createWorkspaceForRepo: workspaceStore.createWorkspaceForRepo,
     createSessionAndOpen,
     setPrompt,
   });

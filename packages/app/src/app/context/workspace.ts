@@ -1341,6 +1341,74 @@ export function createWorkspaceStore(options: {
     }
   }
 
+  async function createWorkspaceForRepo(input: {
+    repoUrl?: string | null;
+    folderPath?: string | null;
+    preset?: WorkspacePreset;
+  }): Promise<WorkspaceInfo | null> {
+    if (!isTauriRuntime()) {
+      options.setError(t("app.error.tauri_required", currentLocale()));
+      return null;
+    }
+
+    const repo = input.repoUrl?.trim() ?? "";
+    const folder = input.folderPath?.trim() ?? "";
+    if (!repo && !folder) {
+      options.setError(t("app.error.choose_folder_or_repo", currentLocale()));
+      return null;
+    }
+
+    console.log("[workspace] createWorkspaceForRepo", {
+      hasRepoUrl: Boolean(repo),
+      hasFolderPath: Boolean(folder),
+      preset: input.preset ?? "starter",
+    });
+
+    try {
+      let resolvedFolder = "";
+      if (repo) {
+        console.log("[workspace] cloning repo for workspace");
+        const clone = await workspaceCloneRepo({ repoUrl: repo });
+        resolvedFolder = clone.path;
+      } else {
+        const resolved = await resolveWorkspacePath(folder);
+        if (!resolved) {
+          options.setError(t("app.error.choose_folder", currentLocale()));
+          return null;
+        }
+        resolvedFolder = resolved;
+      }
+
+      console.log("[workspace] workspace folder resolved", { folder: resolvedFolder });
+
+      const name = resolvedFolder.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? "Workspace";
+      const preset = input.preset ?? "starter";
+      const ws = await workspaceCreate({ folderPath: resolvedFolder, name, preset });
+      setWorkspaces(ws.workspaces);
+      syncActiveWorkspaceId(ws.activeId);
+      if (ws.activeId) {
+        updateWorkspaceConnectionState(ws.activeId, { status: "connected", message: null });
+      }
+
+      const active = ws.workspaces.find((w) => w.id === ws.activeId) ?? null;
+      if (active) {
+        setProjectDir(active.path);
+        setAuthorizedDirs([active.path]);
+      }
+
+      if (active) {
+        console.log("[workspace] workspace created", { workspaceId: active.id, path: active.path });
+      }
+
+      return active;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : safeStringify(e);
+      console.warn("[workspace] createWorkspaceForRepo failed", { message });
+      options.setError(addOpencodeCacheHint(message));
+      return null;
+    }
+  }
+
   async function createSandboxFlow(
     preset: WorkspacePreset,
     folder: string | null,
@@ -2703,6 +2771,7 @@ export function createWorkspaceStore(options: {
     testWorkspaceConnection,
     connectToServer,
     createWorkspaceFlow,
+    createWorkspaceForRepo,
     createSandboxFlow,
     createRemoteWorkspaceFlow,
     updateRemoteWorkspaceFlow,

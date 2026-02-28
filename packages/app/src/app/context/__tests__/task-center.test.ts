@@ -4,7 +4,8 @@ import { createRoot } from "solid-js";
 import { createTaskCenterStore } from "../task-center";
 import { RequirementAnalyzer } from "../../../api/requirement-analyzer";
 import { TFSClient } from "../../../api/tfs";
-import { AnalysisCache, createMemoryCacheAdapter } from "../../lib/analysis-cache";
+import { AnalysisCache } from "../../lib/analysis-cache";
+import { createAnalysisCacheAdapter, createTaskCenterArtifactStore } from "../../lib/task-center-artifacts";
 import { AutoAnalyzer } from "../../lib/auto-analyzer";
 import { AnalysisQueue } from "../../lib/analysis-queue";
 import * as tfsSync from "../../lib/sync-task-to-tfs";
@@ -106,11 +107,14 @@ const waitForStatus = (predicate: () => boolean, timeoutMs = 2000) =>
   });
 
 describe("task-center integration", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.restoreAllMocks();
     vi.spyOn(AnalysisQueue, "getInstance").mockReturnValue(new AnalysisQueue());
     storageBuckets.clear();
-    AnalysisCache.configure({ workspaceRoot: "workspace", adapter: createMemoryCacheAdapter() });
+    const artifactsStore = createTaskCenterArtifactStore("workspace");
+    const artifacts = await artifactsStore.list();
+    await Promise.all(artifacts.map((entry) => artifactsStore.remove(entry.tfsId)));
+    AnalysisCache.configure({ adapter: createAnalysisCacheAdapter(artifactsStore) });
     setAutoAnalysisConfig({ enabled: true, autoSyncToTfs: false, maxRetries: 1 });
   });
 

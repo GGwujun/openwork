@@ -5,6 +5,7 @@ import type { Client, TaskCenterItem, TaskCenterStatus, TaskCenterStage, TaskCen
 import type { TFSConfig, FormattedWorkItem } from "../../api/tfs";
 import { TFSClient, DEFAULT_SERVER_URL } from "../../api/tfs";
 import { Persist, persisted } from "../utils/persist";
+import { safeParseJson } from "../utils";
 import { unwrap } from "../lib/opencode";
 import { parseTasks, updateTaskStatus, type ParsedTask } from "../lib/tasks-parser";
 
@@ -32,21 +33,20 @@ import type {
 import { getAutoAnalysisConfig, subscribeAutoAnalysisConfig } from '../../types/config';
 
 // AI Generate Plan
-import { 
-  buildGeneratePlanPrompt, 
-  parseGeneratedFiles, 
-  readGeneratedFiles,
-  readPlanStatus,
-  writePlanStatus,
-  readAnalysisResult,
-  writeAnalysisResult,
-  readReposResult,
-  writeReposResult,
+import {
+  buildGeneratePlanPrompt,
+  parseGeneratedPlan,
+} from "./task-center-generate-plan";
+import { fsReadFile, type WorkspaceInfo } from '../lib/tauri';
+import { AnalysisCache, type CacheEntry, type AnalysisCacheData } from '../lib/analysis-cache';
+import {
+  createAnalysisCacheAdapter,
+  createTaskCenterArtifactStore,
   initPlanStatus,
   type PlanStatus,
-} from './task-center-generate-plan';
-import { fsReadFile } from '../lib/tauri';
-import { AnalysisCache, type CacheEntry, type AnalysisCacheData } from '../lib/analysis-cache';
+  type TaskCenterArtifactStore,
+  type TaskCenterPlanDocs,
+} from "../lib/task-center-artifacts";
 import { AnalysisQueue } from '../lib/analysis-queue';
 import { AutoAnalyzer } from '../lib/auto-analyzer';
 
@@ -101,16 +101,18 @@ export function mergeTfsItemsWithAutomation(
     const autoState = getAutomationState(automation, item.tfsId);
     const tfsSync = tfsSyncMap?.[item.tfsId];
     const isTfsSynced = tfsSync?.analysisSynced || tfsSync?.planSynced;
+    const shouldMergeAutomation = !tfsSyncMap || isTfsSynced;
     
     if (autoState) {
       // TFS state has priority - never override TFS status
       // Only use automation stage/subStage for display if TFS is synced (analysis done)
-      const mergedStage = isTfsSynced ? (autoState.stage ?? item.stage) : item.stage;
-      const mergedSubStage = isTfsSynced ? autoState.subStage : undefined;
+      const mergedStage = shouldMergeAutomation ? (autoState.stage ?? item.stage) : item.stage;
+      const mergedSubStage = shouldMergeAutomation ? autoState.subStage : undefined;
 
       result.push({
         ...item,
-        // Keep TFS status as-is (todo for "已分析" items)
+        // When sync map is provided, keep TFS status; otherwise allow automation status.
+        status: tfsSyncMap ? item.status : (autoState.status ?? item.status),
         stage: mergedStage,
         subStage: mergedSubStage,
       });
@@ -128,15 +130,16 @@ export function mergeTfsItemsWithAutomation(
     if (!Number.isNaN(tfsId) && !processedTfsIds.has(tfsId) && autoState) {
       const tfsSync = tfsSyncMap?.[tfsId];
       const isTfsSynced = tfsSync?.analysisSynced || tfsSync?.planSynced;
+      const shouldAddAutomation = !tfsSyncMap || isTfsSynced;
       
-      // Only add orphan automation items if they have TFS sync
-      if (isTfsSynced) {
+      // Only add orphan automation items if they have TFS sync (or sync map not provided)
+      if (shouldAddAutomation) {
         // Create a TaskCenterItem from automation state
         result.push({
           id: `tfs-${tfsId}`,
           tfsId,
           title: `Work Item #${tfsId}`, // Placeholder, should be loaded from storage
-          status: "todo", // Always todo since not in TFS query (should be "已分析")
+          status: autoState.status ?? "todo",
           stage: autoState.stage,
           updatedAt: autoState.updatedAt,
         });
@@ -282,6 +285,61 @@ function extractOutput(result: unknown): string | null {
   }
   return null;
 }
+
+const normalizePathValue = (value: string): string =>
+  value.trim().replace(/\\/g, "/").replace(/\/+$/g, "");
+
+const isGitUrl = (value: string): boolean =>
+  /^(https?:\/\/|ssh:\/\/|git@)/i.test(value.trim());
+
+const normalizeGitRemote = (value: string | null | undefined): string | null => {
+  const trimmed = (value ?? "").trim();
+  if (!trimmed) return null;
+
+  let hostPath = trimmed;
+  const scpLike = trimmed.match(/^git@([^:]+):(.+)$/i);
+  if (scpLike) {
+    hostPath = `${scpLike[1]}/${scpLike[2]}`;
+  } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      hostPath = `${parsed.host}${parsed.pathname}`;
+    } catch {
+      hostPath = trimmed;
+    }
+  }
+
+  return hostPath
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/g, "")
+    .toLowerCase();
+};
+
+const parseGitOriginUrl = (raw: string): string | null => {
+  const lines = raw.split(/\r?\n/);
+  let inOrigin = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const sectionMatch = trimmed.match(/^\[(.+)\]$/);
+    if (sectionMatch) {
+      inOrigin = /^remote\s+"origin"$/i.test(sectionMatch[1].trim());
+      continue;
+    }
+
+    if (!inOrigin) continue;
+
+    const urlMatch = trimmed.match(/^url\s*=\s*(.+)$/i);
+    if (urlMatch) return urlMatch[1].trim();
+  }
+
+  return null;
+};
+
+const pickPrimaryRepo = (repos: RepositoryMatch[]): RepositoryMatch | null =>
+  repos.find((repo) => repo.isPrimary) ?? repos[0] ?? null;
 
 // ========== Forge Track File Generation Helpers ==========
 
@@ -498,6 +556,7 @@ async function callAIGeneratePlan(
       
       if (data.output || data.content) {
         const content = data.output || data.content;
+        console.log(`[TaskCenter] [DEBUG] Assistant immediate output:\n${content}`);
         console.log(`[TaskCenter] [DEBUG] Got content from promptAsync, length: ${content.length}`);
         return content;
       }
@@ -509,6 +568,29 @@ async function callAIGeneratePlan(
     const maxWaitTime = 5 * 60 * 1000;
     const pollInterval = 1000;
     const startTime = Date.now();
+    const loggedAssistantMessages = new Map<string, string>();
+
+    const logAssistantMessages = (assistantMessages: any[]) => {
+      assistantMessages.forEach((msg: any, index: number) => {
+        const messageId = String(msg.info?.id ?? `assistant-${index}`);
+        if (msg.parts && Array.isArray(msg.parts)) {
+          const textParts = msg.parts.filter((p: any) => p.type === 'text');
+          const content = textParts.map((p: any) => p.text).join('');
+          const nonTextTypes = msg.parts
+            .filter((p: any) => p.type && p.type !== 'text')
+            .map((p: any) => p.type);
+          const nonTextSummary = nonTextTypes.length > 0
+            ? ` (non-text parts: ${Array.from(new Set(nonTextTypes)).join(', ')})`
+            : '';
+          const lastContent = loggedAssistantMessages.get(messageId);
+          if (content && content !== lastContent) {
+            console.log(`[TaskCenter] [DEBUG] Assistant message (${messageId})${nonTextSummary}:\n${content}`);
+            console.log(`[TaskCenter] [DEBUG] Assistant parts (${messageId}):\n${JSON.stringify(msg.parts, null, 2)}`);
+            loggedAssistantMessages.set(messageId, content);
+          }
+        }
+      });
+    };
     
     while (Date.now() - startTime < maxWaitTime) {
       await new Promise(resolve => setTimeout(resolve, pollInterval));
@@ -527,8 +609,10 @@ async function callAIGeneratePlan(
       
       // 查找 assistant 消息
       const assistantMessages = messages.filter((m: any) => m.info?.role === 'assistant');
-      
+
       if (assistantMessages.length > 0) {
+        logAssistantMessages(assistantMessages);
+
         const lastMsg = assistantMessages[assistantMessages.length - 1];
         
         // 如果有错误，立即抛出
@@ -597,6 +681,13 @@ export function createTaskCenterStore(options: {
   client: () => Client | null;
   getSelectedModel?: () => { providerID: string; modelID: string } | null;
   activeWorkspaceRoot: () => string;
+  workspaces?: () => WorkspaceInfo[];
+  activateWorkspace?: (workspaceId: string) => Promise<boolean>;
+  createWorkspaceForRepo?: (input: {
+    repoUrl?: string | null;
+    folderPath?: string | null;
+    preset?: "starter" | "automation" | "minimal";
+  }) => Promise<WorkspaceInfo | null>;
   createSessionAndOpen: () => void;
   setPrompt: (value: string) => void;
   tfsConfig?: () => TFSConfig | null;
@@ -762,13 +853,60 @@ export function createTaskCenterStore(options: {
     estimatedTimeRemaining: undefined,
   });
 
-  const ensureAnalysisCache = () => {
-    const workspaceRoot = options.activeWorkspaceRoot().trim();
-    if (!workspaceRoot) {
-      throw new Error("Workspace root is required for analysis cache");
+  type WorkspaceMapEntry = {
+    workspaceId: string;
+    workspaceRoot?: string;
+    repoUrlKey?: string;
+    repoPathKey?: string;
+    updatedAt: number;
+  };
+
+  const workspaceMapStore = createStore<Record<number, WorkspaceMapEntry>>({});
+  const workspaceMap = workspaceMapStore[0];
+  const setWorkspaceMapEntry = (tfsId: number, entry: WorkspaceMapEntry) => {
+    workspaceMapStore[1]((prev) => ({
+      ...prev,
+      [tfsId]: entry,
+    }));
+  };
+
+  const deleteWorkspaceMapEntry = (tfsId: number) => {
+    workspaceMapStore[1]((prev) => {
+      if (!prev[tfsId]) return prev;
+      const next = { ...prev };
+      delete next[tfsId];
+      return next;
+    });
+  };
+
+  persisted(
+    Persist.global("task-center.workspace-map"),
+    workspaceMapStore
+  );
+
+  let artifactsStore: TaskCenterArtifactStore | null = null;
+  let artifactsScope = "";
+  let cacheAdapterScope = "";
+
+  const getArtifactsScope = () => options.activeWorkspaceRoot().trim() || "default";
+
+  const getArtifactsStore = () => {
+    const scope = getArtifactsScope();
+    if (!artifactsStore || artifactsScope !== scope) {
+      artifactsStore = createTaskCenterArtifactStore(scope);
+      artifactsScope = scope;
     }
-    AnalysisCache.configure({ workspaceRoot });
-    return workspaceRoot;
+    return artifactsStore;
+  };
+
+  const ensureAnalysisCache = () => {
+    const scope = getArtifactsScope();
+    if (cacheAdapterScope !== scope) {
+      const store = getArtifactsStore();
+      AnalysisCache.configure({ adapter: createAnalysisCacheAdapter(store) });
+      cacheAdapterScope = scope;
+    }
+    return scope;
   };
 
   const mergeAnalysisData = (entry: CacheEntry | null, patch: Partial<AnalysisCacheData> = {}): AnalysisCacheData => ({
@@ -785,6 +923,275 @@ export function createTaskCenterStore(options: {
     const existing = await AnalysisCache.get(workItemId);
     const data = mergeAnalysisData(existing, patch);
     return AnalysisCache.set(workItemId, data, options);
+  };
+
+  const readArtifact = async (tfsId: number) => getArtifactsStore().get(tfsId);
+
+  const readPlanDocs = async (tfsId: number): Promise<TaskCenterPlanDocs | null> => {
+    const artifact = await readArtifact(tfsId);
+    return artifact?.planDocs ?? null;
+  };
+
+  const writePlanDocs = async (
+    tfsId: number,
+    docs: TaskCenterPlanDocs,
+    selectedRepos?: RepositoryMatch[]
+  ) => {
+    const nextDocs: TaskCenterPlanDocs = {
+      ...docs,
+      generatedAt: docs.generatedAt ?? new Date().toISOString(),
+    };
+    await getArtifactsStore().update(tfsId, {
+      planDocs: nextDocs,
+      selectedRepos: selectedRepos ?? undefined,
+    });
+  };
+
+  const readPlanStatus = async (tfsId: number): Promise<PlanStatus | null> => {
+    const artifact = await readArtifact(tfsId);
+    return artifact?.planStatus ?? null;
+  };
+
+  const writePlanStatus = async (status: PlanStatus) => {
+    await getArtifactsStore().update(status.tfsId, { planStatus: status });
+  };
+
+
+  type WorkspaceMatch = {
+    workspace: WorkspaceInfo;
+    root: string;
+    originUrl: string | null;
+  };
+
+  const resolveWorkspaceRoot = (workspace: WorkspaceInfo): string => {
+    if (workspace.workspaceType === "remote") {
+      return workspace.directory?.trim() ?? "";
+    }
+    return workspace.path?.trim() ?? "";
+  };
+
+  const readWorkspaceOriginUrl = async (workspaceRoot: string): Promise<string | null> => {
+    if (!workspaceRoot) return null;
+    try {
+      const result = await fsReadFile(".git/config", workspaceRoot);
+      return parseGitOriginUrl(result.content);
+    } catch {
+      return null;
+    }
+  };
+
+  const resolveWorkspaceForRepos = async (
+    item: TaskCenterItem,
+    repos: RepositoryMatch[]
+  ): Promise<{ match: WorkspaceMatch | null; reason?: string }> => {
+    const primaryRepo = pickPrimaryRepo(repos);
+    if (!primaryRepo) {
+      console.warn("[TaskCenter] Workspace match skipped: no repo selected");
+      return { match: null, reason: "未识别到目标仓库" };
+    }
+
+    const allWorkspaces = options.workspaces?.() ?? [];
+    const localWorkspaces = allWorkspaces.filter((ws) => ws.workspaceType !== "remote");
+    if (localWorkspaces.length === 0) {
+      console.warn("[TaskCenter] Workspace match failed: no local workspaces", { total: allWorkspaces.length });
+      return { match: null, reason: "未检测到可用工作区，请先创建工作区" };
+    }
+
+    const repoUrl = isGitUrl(primaryRepo.path) ? primaryRepo.path : "";
+    const repoUrlKey = normalizeGitRemote(repoUrl);
+    const repoPathKey = normalizePathValue(primaryRepo.path).toLowerCase();
+
+    const mapped = workspaceMap[item.tfsId];
+    if (mapped?.workspaceId) {
+      const mappedWorkspace = localWorkspaces.find((ws) => ws.id === mapped.workspaceId) ?? null;
+      if (mappedWorkspace) {
+        const mappedRoot = resolveWorkspaceRoot(mappedWorkspace);
+        const mappedRootKey = normalizePathValue(mappedRoot).toLowerCase();
+        if (mappedRootKey) {
+          console.log("[TaskCenter] Workspace match from map", {
+            tfsId: item.tfsId,
+            workspaceId: mappedWorkspace.id,
+          });
+          return {
+            match: {
+              workspace: mappedWorkspace,
+              root: mappedRoot,
+              originUrl: null,
+            },
+          };
+        }
+      }
+
+      console.warn("[TaskCenter] Workspace map stale, clearing", { tfsId: item.tfsId });
+      deleteWorkspaceMapEntry(item.tfsId);
+    }
+
+    console.log("[TaskCenter] Workspace match start", {
+      repoId: primaryRepo.id,
+      repoName: primaryRepo.name,
+      repoUrlKey,
+      repoPathKey,
+      workspaceCount: localWorkspaces.length,
+    });
+
+    const candidates = await Promise.all(
+      localWorkspaces.map(async (workspace) => {
+        const root = resolveWorkspaceRoot(workspace);
+        const originUrl = await readWorkspaceOriginUrl(root);
+        return { workspace, root, originUrl };
+      })
+    );
+
+    if (repoUrlKey) {
+      const urlMatches = candidates.filter((entry) => normalizeGitRemote(entry.originUrl) === repoUrlKey);
+      console.log("[TaskCenter] Workspace match by url", { repoUrlKey, matches: urlMatches.length });
+      if (urlMatches.length === 1) return { match: urlMatches[0] };
+      if (urlMatches.length > 1) {
+        return { match: null, reason: "匹配到多个工作区，请手动选择" };
+      }
+    }
+
+    const pathMatches = candidates.filter((entry) => {
+      const rootKey = normalizePathValue(entry.root).toLowerCase();
+      return rootKey && rootKey === repoPathKey;
+    });
+    console.log("[TaskCenter] Workspace match by path", { matches: pathMatches.length });
+    if (pathMatches.length === 1) return { match: pathMatches[0] };
+    if (pathMatches.length > 1) {
+      return { match: null, reason: "匹配到多个工作区，请手动选择" };
+    }
+
+    return { match: null, reason: "未匹配到对应工作区，请先创建或选择工作区" };
+  };
+
+  const ensureWorkspaceForRepos = async (item: TaskCenterItem, repos: RepositoryMatch[]): Promise<boolean> => {
+    try {
+      console.log("[TaskCenter] Ensure workspace for repos", { tfsId: item.tfsId, repoCount: repos.length });
+      const { match, reason } = await resolveWorkspaceForRepos(item, repos);
+      if (!match) {
+        const primaryRepo = pickPrimaryRepo(repos);
+        if (primaryRepo && options.createWorkspaceForRepo) {
+          console.log("[TaskCenter] Workspace not found, attempting auto-create", {
+            tfsId: item.tfsId,
+            repoId: primaryRepo.id,
+            repoName: primaryRepo.name,
+            repoPath: primaryRepo.path,
+          });
+          const repoUrl = isGitUrl(primaryRepo.path) ? primaryRepo.path : null;
+          const folderPath = repoUrl ? null : primaryRepo.path;
+          const created = await options.createWorkspaceForRepo({ repoUrl, folderPath, preset: "starter" });
+
+          if (created) {
+            console.log("[TaskCenter] Workspace created", { workspaceId: created.id, workspacePath: created.path });
+            if (options.activateWorkspace) {
+              const activated = await options.activateWorkspace(created.id);
+              if (!activated) {
+                console.warn("[TaskCenter] Workspace activation failed", { workspaceId: created.id });
+                const message = "工作区切换失败，请手动选择匹配的工作区";
+                setWizard({ isAutoGenerating: false, isLoading: false, error: message });
+                setAutoAnalysisState(item.tfsId, {
+                  status: "failed",
+                  message,
+                  error: message,
+                });
+                return false;
+              }
+            }
+
+            const repoUrlKey = normalizeGitRemote(repoUrl ?? "");
+            const repoPathKey = normalizePathValue(primaryRepo.path).toLowerCase();
+            setWorkspaceMapEntry(item.tfsId, {
+              workspaceId: created.id,
+              workspaceRoot: created.path,
+              repoUrlKey: repoUrlKey ?? undefined,
+              repoPathKey,
+              updatedAt: Date.now(),
+            });
+
+            setWizard({ error: null });
+            return true;
+          }
+        }
+
+        const message = reason ?? "未匹配到对应工作区，请先创建或选择工作区";
+        console.warn("[TaskCenter] Workspace match failed", { tfsId: item.tfsId, reason: message });
+        setWizard({ isAutoGenerating: false, isLoading: false, error: message });
+        setAutoAnalysisState(item.tfsId, {
+          status: "failed",
+          message,
+          error: message,
+        });
+        return false;
+      }
+
+      const currentRoot = normalizePathValue(options.activeWorkspaceRoot().trim()).toLowerCase();
+      const matchRoot = normalizePathValue(match.root).toLowerCase();
+      if (currentRoot && matchRoot && currentRoot === matchRoot) {
+        console.log("[TaskCenter] Workspace already active", { workspaceId: match.workspace.id, root: match.root });
+        const repoUrl = pickPrimaryRepo(repos)?.path ?? "";
+        const repoUrlKey = normalizeGitRemote(repoUrl);
+        const repoPathKey = normalizePathValue(pickPrimaryRepo(repos)?.path ?? "").toLowerCase();
+        setWorkspaceMapEntry(item.tfsId, {
+          workspaceId: match.workspace.id,
+          workspaceRoot: match.root,
+          repoUrlKey: repoUrlKey ?? undefined,
+          repoPathKey,
+          updatedAt: Date.now(),
+        });
+        setWizard({ error: null });
+        return true;
+      }
+
+      if (!options.activateWorkspace) {
+        console.warn("[TaskCenter] Workspace activation unavailable", { workspaceId: match.workspace.id });
+        const message = "无法切换工作区，请手动选择匹配的工作区";
+        setWizard({ isAutoGenerating: false, isLoading: false, error: message });
+        setAutoAnalysisState(item.tfsId, {
+          status: "failed",
+          message,
+          error: message,
+        });
+        return false;
+      }
+
+      console.log("[TaskCenter] Activating workspace", { workspaceId: match.workspace.id, root: match.root });
+      const activated = await options.activateWorkspace(match.workspace.id);
+      if (!activated) {
+        console.warn("[TaskCenter] Workspace activation failed", { workspaceId: match.workspace.id });
+        const message = "工作区切换失败，请手动选择匹配的工作区";
+        setWizard({ isAutoGenerating: false, isLoading: false, error: message });
+        setAutoAnalysisState(item.tfsId, {
+          status: "failed",
+          message,
+          error: message,
+        });
+        return false;
+      }
+
+      const repoUrl = pickPrimaryRepo(repos)?.path ?? "";
+      const repoUrlKey = normalizeGitRemote(repoUrl);
+      const repoPathKey = normalizePathValue(pickPrimaryRepo(repos)?.path ?? "").toLowerCase();
+      setWorkspaceMapEntry(item.tfsId, {
+        workspaceId: match.workspace.id,
+        workspaceRoot: match.root,
+        repoUrlKey: repoUrlKey ?? undefined,
+        repoPathKey,
+        updatedAt: Date.now(),
+      });
+
+      setWizard({ error: null });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "工作区匹配失败";
+      console.warn("[TaskCenter] Workspace ensure error", { tfsId: item.tfsId, message });
+      setWizard({ isAutoGenerating: false, isLoading: false, error: message });
+      setAutoAnalysisState(item.tfsId, {
+        status: "failed",
+        message,
+        error: message,
+      });
+      return false;
+    }
   };
 
   const buildAnalysisResultFromCache = (entry: CacheEntry | null): AnalysisResult | null => {
@@ -1150,9 +1557,9 @@ export function createTaskCenterStore(options: {
 
   // Hard-coded config for immediate use (will be overridden by file config when available)
   const HARDCODED_CONFIG: TFSConfig = {
-    serverUrl: 'http://tfs2018-web.winning.com.cn:8080/tfs/WINNING-6.0',
-    pat: 'yxnmy2hwkv4l2ulz7p7zt4b43fotxmsedamak4vfeattcehd5elq',
-    username: 'WINNING\\g_wj'
+    // serverUrl: 'http://tfs2018-web.winning.com.cn:8080/tfs/WINNING-6.0',
+    // pat: 'yxnmy2hwkv4l2ulz7p7zt4b43fotxmsedamak4vfeattcehd5elq',
+    // username: 'WINNING\\g_wj'
   };
 
   /**
@@ -1586,12 +1993,6 @@ export function createTaskCenterStore(options: {
 
     // Open wizard directly in plan view if documents exist
     async openPlanViewer(item: TaskCenterItem): Promise<boolean> {
-      const directory = options.activeWorkspaceRoot().trim();
-      if (!directory) {
-        setWizard({ isOpen: true, step: 3, isLoading: false, error: '未选择工作目录' });
-        return false;
-      }
-
       setWizard({
         isOpen: true,
         step: 3,
@@ -1602,32 +2003,25 @@ export function createTaskCenterStore(options: {
         autoPlanProgress: 0,
       });
 
-      const trackPath = `forge/tracks/tfs-${item.tfsId}`;
-      const possibleFiles = [
-        `${trackPath}/intent.md`,
-        `${trackPath}/design.md`,
-        `${trackPath}/tasks.md`,
-      ];
+      ensureAnalysisCache();
+      const cached = await AnalysisCache.get(item.tfsId);
+      let requirement = cached?.data.requirement ?? null;
+      let detection = cached?.data.detection ?? null;
 
-      const fileResult = await readGeneratedFiles(possibleFiles, directory);
-      const hasContent = !!(fileResult.intent || fileResult.design || fileResult.tasks);
+      let planDocs = await readPlanDocs(item.tfsId);
+      let selectedRepos = (await readArtifact(item.tfsId))?.selectedRepos ?? [];
 
-      if (!hasContent) {
-        setWizard('isLoading', false);
+      if (!planDocs || (!planDocs.intent && !planDocs.design && !planDocs.tasks)) {
+        setWizard("isLoading", false);
         return false;
       }
 
-      const [analysisResult, reposResult] = await Promise.all([
-        readAnalysisResult(item.tfsId, directory),
-        readReposResult(item.tfsId, directory),
-      ]);
-
-      if (analysisResult?.requirement && reposResult?.detection) {
+      if (requirement && detection) {
         const completedAt = Date.now();
         try {
           await writeAnalysisCache(item.tfsId, {
-            requirement: analysisResult.requirement,
-            detection: reposResult.detection,
+            requirement,
+            detection,
           }, {
             status: "completed",
             completedAt,
@@ -1643,8 +2037,8 @@ export function createTaskCenterStore(options: {
           message: "已加载计划",
           result: {
             workItemId: item.tfsId,
-            requirement: analysisResult.requirement,
-            detection: reposResult.detection,
+            requirement,
+            detection,
             duration: 0,
             completedAt,
           },
@@ -1658,14 +2052,14 @@ export function createTaskCenterStore(options: {
         isLoading: false,
         error: null,
         generationProgress: 100,
-        autoPlanStep: 'completed',
+        autoPlanStep: "completed",
         autoPlanProgress: 100,
-        requirement: analysisResult?.requirement ?? null,
-        detection: reposResult?.detection ?? null,
-        selectedRepos: reposResult?.selectedRepos ?? [],
-        intent: fileResult.intent,
-        design: fileResult.design,
-        tasks: fileResult.tasks,
+        requirement,
+        detection,
+        selectedRepos,
+        intent: planDocs.intent ?? "",
+        design: planDocs.design ?? "",
+        tasks: planDocs.tasks ?? "",
       });
 
       return true;
@@ -1748,6 +2142,12 @@ export function createTaskCenterStore(options: {
         setWizard('selectedRepos', selectedRepos);
 
         try {
+          await getArtifactsStore().update(requirement.workItemId, { selectedRepos });
+        } catch {
+          // ignore persistence failures
+        }
+
+        try {
           const completedAt = Date.now();
           await writeAnalysisCache(requirement.workItemId, {
             requirement,
@@ -1778,6 +2178,9 @@ export function createTaskCenterStore(options: {
         // Auto-generate plan after repo detection
         const currentItem = items().find(i => i.tfsId === requirement.workItemId);
         if (currentItem && selectedRepos.length > 0) {
+          const workspaceReady = await ensureWorkspaceForRepos(currentItem, selectedRepos);
+          if (!workspaceReady) return;
+
           console.log(`[TaskCenter] Auto-generating plan for #${requirement.workItemId}`);
           setWizard({
             isAutoGenerating: true,
@@ -1804,10 +2207,27 @@ export function createTaskCenterStore(options: {
       }
     },
     
-    // Step 3: Generate plan - 只生成 Forge track 文件，不改变 TFS 状态
+    // Step 3: Generate plan - 仅生成计划文档，不改变 TFS 状态
     async generatePlan(item: TaskCenterItem) {
-      const requirement = wizard.requirement;
-      const selectedRepos = wizard.selectedRepos;
+      let requirement = wizard.requirement;
+      let selectedRepos = wizard.selectedRepos;
+      let docs = {
+        intent: wizard.intent,
+        design: wizard.design,
+        tasks: wizard.tasks,
+      };
+      if (!requirement || selectedRepos.length === 0 || (!docs.intent && !docs.design && !docs.tasks)) {
+        const artifacts = await loadLocalPlanArtifacts(item);
+        if (artifacts) {
+          requirement = requirement ?? artifacts.requirement;
+          if (selectedRepos.length === 0) selectedRepos = artifacts.selectedRepos;
+          docs = {
+            intent: docs.intent ?? artifacts.docs.intent,
+            design: docs.design ?? artifacts.docs.design,
+            tasks: docs.tasks ?? artifacts.docs.tasks,
+          };
+        }
+      }
       
       if (!requirement) {
         setWizard('error', '需求分析结果不存在');
@@ -1816,6 +2236,11 @@ export function createTaskCenterStore(options: {
       
       if (selectedRepos.length === 0) {
         setWizard('error', '请至少选择一个代码仓库');
+        return;
+      }
+
+      const workspaceReady = await ensureWorkspaceForRepos(item, selectedRepos);
+      if (!workspaceReady) {
         return;
       }
       
@@ -1829,136 +2254,71 @@ export function createTaskCenterStore(options: {
         tasks: undefined,
       });
       
+      let shouldSync = false;
       try {
-        // 1. 获取工作目录和客户端
-        setWizard('generationProgress', 10);
+        setWizard("generationProgress", 10);
         const directory = options.activeWorkspaceRoot().trim();
         const activeClient = options.client();
         if (!activeClient) {
-          throw new Error('OpenWork client not connected');
+          throw new Error("OpenWork client not connected");
         }
-        
-        // 2. 先检查是否已有生成的文档
-        const trackPath = `forge/tracks/tfs-${item.tfsId}`;
-        const possibleFiles = [
-          `${trackPath}/intent.md`,
-          `${trackPath}/design.md`, 
-          `${trackPath}/tasks.md`,
-        ];
-        
-        console.log(`[TaskCenter] [DEBUG] Checking existing files for TFS #${item.tfsId}...`);
-        let existingFiles: string[] = [];
-        
-        for (const filePath of possibleFiles) {
-          try {
-            await fsReadFile(filePath, directory);
-            existingFiles.push(filePath);
-            console.log(`[TaskCenter] [DEBUG] Found existing file: ${filePath}`);
-          } catch {
-            console.log(`[TaskCenter] [DEBUG] File not found: ${filePath}`);
-          }
+
+        const cachedDocs = await readPlanDocs(item.tfsId);
+        if (cachedDocs?.intent || cachedDocs?.design || cachedDocs?.tasks) {
+          setWizard({
+            generationProgress: 100,
+            autoPlanProgress: 100,
+            intent: cachedDocs.intent ?? "",
+            design: cachedDocs.design ?? "",
+            tasks: cachedDocs.tasks ?? "",
+          });
+          shouldSync = true;
+          return;
         }
-        
-        // 如果已有文档，直接读取不调用AI
-        if (existingFiles.length > 0) {
-          console.log(`[TaskCenter] [DEBUG] Found ${existingFiles.length} existing files, skipping AI generation`);
-          setWizard({ generationProgress: 50, autoPlanProgress: 50 });
-          
-          const fileResult = await readGeneratedFiles(possibleFiles, directory);
-          
-          if (fileResult.intent || fileResult.design || fileResult.tasks) {
-            setWizard({
-              generationProgress: 100,
-              autoPlanProgress: 100,
-              intent: fileResult.intent,
-              design: fileResult.design,
-              tasks: fileResult.tasks,
-            });
-            console.log(`[TaskCenter] [DEBUG] Loaded existing documents, skipping AI call`);
-            console.log(`[TaskCenter] [DEBUG] Loaded existing documents, skipping AI call`);
-            void autoSyncExistingPlanToTfs(item);
-            return;
-          }
-        }
-        
-        // 3. 构建 prompt
+
         setWizard({ generationProgress: 20, autoPlanProgress: 20 });
-        console.log(`[TaskCenter] Building generate plan prompt for TFS #${item.tfsId}...`);
         const prompt = buildGeneratePlanPrompt(item, requirement, selectedRepos, directory);
-        
-        // 4. 调用 AI 生成（自动重试3次）
+        console.log("[TaskCenter] Generate plan prompt:\n" + prompt);
+
         setWizard({ generationProgress: 40, autoPlanProgress: 40 });
-        
+
         const maxRetries = 3;
-        let aiResponse: string = '';
+        let aiResponse = "";
         let lastError: Error | null = null;
-        
-        console.log(`[TaskCenter] [DEBUG] Starting AI plan generation (max ${maxRetries} retries)...`);
-        
+
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
           try {
-            console.log(`[TaskCenter] [DEBUG] Attempt ${attempt}/${maxRetries} - calling callAIGeneratePlan...`);
             aiResponse = await callAIGeneratePlan(activeClient, prompt, options.getSelectedModel);
-            console.log(`[TaskCenter] [DEBUG] Attempt ${attempt} SUCCESS - got response length: ${aiResponse.length}`);
-            console.log(`[TaskCenter] [DEBUG] Full AI response:\n${aiResponse}`);
             break;
           } catch (error) {
             lastError = error instanceof Error ? error : new Error(String(error));
-            console.error(`[TaskCenter] [DEBUG] Attempt ${attempt} FAILED:`, lastError.message);
-            console.error(`[TaskCenter] [DEBUG] Attempt ${attempt} error details:`, error);
-            
             if (attempt < maxRetries) {
               const delay = attempt * 2000;
-              console.log(`[TaskCenter] [DEBUG] Retrying in ${delay}ms...`);
               await new Promise(r => setTimeout(r, delay));
             }
           }
         }
-        
-        console.log(`[TaskCenter] [DEBUG] All attempts completed. aiResponse length: ${aiResponse.length}`);
-        
+
         if (!aiResponse) {
           throw new Error(`生成计划失败（已重试${maxRetries}次）。错误: ${lastError?.message || '未知错误'}。请检查 OpenCode 连接或稍后重试。`);
         }
-        
-        // 5. 解析 AI 返回的文件列表
+
         setWizard({ generationProgress: 60, autoPlanProgress: 60 });
-        console.log(`[TaskCenter] [DEBUG] Parsing generated files from response...`);
-        const generatedFiles = parseGeneratedFiles(aiResponse);
-        console.log(`[TaskCenter] [DEBUG] Parsed files count: ${generatedFiles.length}`);
-        console.log(`[TaskCenter] [DEBUG] Generated files list:`, generatedFiles);
-        
-        // 6. 尝试读取 AI 生成的文件
-        let intentContent = '';
-        let designContent = '';
-        let tasksContent = '';
-        
-        if (generatedFiles.length > 0) {
-          console.log(`[TaskCenter] [DEBUG] Reading ${generatedFiles.length} AI-generated files from: ${directory}`);
-          const fileResult = await readGeneratedFiles(generatedFiles, directory);
-          intentContent = fileResult.intent;
-          designContent = fileResult.design;
-          tasksContent = fileResult.tasks;
-          console.log(`[TaskCenter] [DEBUG] File read results - intent: ${intentContent ? 'YES' : 'NO'}, design: ${designContent ? 'YES' : 'NO'}, tasks: ${tasksContent ? 'YES' : 'NO'}`);
-        } else {
-          console.warn(`[TaskCenter] [DEBUG] No files found in AI response! Using fallback plan parsing...`);
-        }
-        
-        // 7. 如果文件缺失，显示详细信息
+        const parsed = parseGeneratedPlan(aiResponse);
+        const intentContent = parsed.intent.trim();
+        const designContent = parsed.design.trim();
+        const tasksContent = parsed.tasks.trim();
+
         if (!intentContent && !designContent && !tasksContent) {
-          console.error(`[TaskCenter] [DEBUG] NO PLAN CONTENT FOUND!`);
-          console.error(`[TaskCenter] [DEBUG] Generated files:`, generatedFiles);
-          console.error(`[TaskCenter] [DEBUG] Response length: ${aiResponse.length}`);
-          console.error(`[TaskCenter] [DEBUG] Last 500 chars of response: ${aiResponse.substring(aiResponse.length - 500)}`);
-          throw new Error('AI 未能生成开发计划文档。请检查 AI 是否正确执行了 forge-plan skill。');
+          throw new Error("AI 未能生成开发计划文档。请检查 AI 输出格式。");
         }
-        
-        // 8. 完成并加载任务 - 一次性更新所有状态
-        console.log(`[TaskCenter] [DEBUG] Setting final state with documents...`);
-        console.log(`[TaskCenter] [DEBUG] intentContent length: ${intentContent.length}`);
-        console.log(`[TaskCenter] [DEBUG] designContent length: ${designContent.length}`);
-        console.log(`[TaskCenter] [DEBUG] tasksContent length: ${tasksContent.length}`);
-        
+
+        await writePlanDocs(item.tfsId, {
+          intent: intentContent,
+          design: designContent,
+          tasks: tasksContent,
+        }, selectedRepos);
+
         setWizard({
           generationProgress: 100,
           autoPlanProgress: 100,
@@ -1966,13 +2326,7 @@ export function createTaskCenterStore(options: {
           design: designContent,
           tasks: tasksContent,
         });
-
-        console.log(`[TaskCenter] [DEBUG] Wizard state updated`);
-        console.log(`[TaskCenter] Tasks loaded:`, tasks().length);
-        void autoSyncExistingPlanToTfs(item);
-        // 保持向导弹窗打开，不自动关闭
-        // this.close();
-        
+        shouldSync = true;
       } catch (err) {
         const message = err instanceof Error ? err.message : '生成计划失败';
         setWizard({ 
@@ -1993,7 +2347,7 @@ export function createTaskCenterStore(options: {
     /**
      * 单步自动开发计划流程
      * 依次执行：需求分析 → 仓库识别 → 生成计划
-     * 每步结果持久化到文件，支持中断恢复
+     * 每步结果持久化存储，支持中断恢复
      */
     async createDevelopmentPlan(item: TaskCenterItem) {
       const directory = options.activeWorkspaceRoot().trim();
@@ -2010,9 +2364,10 @@ export function createTaskCenterStore(options: {
         autoPlanProgress: 0,
       });
 
+      let shouldSync = false;
       try {
         // 1. 读取或初始化状态
-        let status = await readPlanStatus(item.tfsId, directory);
+        let status = await readPlanStatus(item.tfsId);
         if (!status) {
           status = initPlanStatus(item.tfsId, item.title);
         }
@@ -2025,24 +2380,23 @@ export function createTaskCenterStore(options: {
           const analyzer = getRequirementAnalyzer();
           const requirement = await analyzer.analyze(item.tfsId);
           
-          // 保存分析结果
-          console.log(`[TaskCenter] [AutoPlan] Saving analysis result to file...`);
+          const completedAt = Date.now();
           try {
-            await writeAnalysisResult(item.tfsId, item.title, requirement, directory);
-            console.log(`[TaskCenter] [AutoPlan] Analysis result saved successfully`);
+            await writeAnalysisCache(item.tfsId, { requirement }, {
+              status: "completed",
+              completedAt,
+              timestamp: completedAt,
+            });
           } catch (writeError) {
-            console.error(`[TaskCenter] [AutoPlan] Failed to save analysis result:`, writeError);
-            // 继续执行，不中断流程
+            console.error(`[TaskCenter] [AutoPlan] Failed to persist analysis result:`, writeError);
           }
           
           // 更新状态
-          status.steps.analysis = { status: 'completed', output: `01-analysis.json` };
+          status.steps.analysis = { status: "completed", output: "analysis" };
           status.completedSteps.push('analysis');
           status.updatedAt = new Date().toISOString();
-          console.log(`[TaskCenter] [AutoPlan] Saving plan status...`);
           try {
-            await writePlanStatus(status, directory);
-            console.log(`[TaskCenter] [AutoPlan] Plan status saved successfully`);
+            await writePlanStatus(status);
           } catch (writeError) {
             console.error(`[TaskCenter] [AutoPlan] Failed to save plan status:`, writeError);
           }
@@ -2053,11 +2407,12 @@ export function createTaskCenterStore(options: {
           });
           console.log(`[TaskCenter] [AutoPlan] Step 1/3: Analysis completed`);
         } else {
-          // 读取已存在的分析结果
-          const analysisResult = await readAnalysisResult(item.tfsId, directory);
-          if (analysisResult) {
-            setWizard({ 
-              requirement: analysisResult.requirement,
+          ensureAnalysisCache();
+          const requirement = (await AnalysisCache.get(item.tfsId))?.data.requirement ?? null;
+
+          if (requirement) {
+            setWizard({
+              requirement,
               autoPlanProgress: 33,
             });
             console.log(`[TaskCenter] [AutoPlan] Step 1/3: Analysis loaded from cache`);
@@ -2078,14 +2433,28 @@ export function createTaskCenterStore(options: {
           const detection = analyzer.detectRepos(requirement);
           const selectedRepos = detection.primary.filter((r: RepositoryMatch) => r.confidence > 0.6);
           
-          // 保存识别结果
-          await writeReposResult(item.tfsId, detection, selectedRepos, directory);
+          try {
+            const completedAt = Date.now();
+            await writeAnalysisCache(item.tfsId, { requirement, detection }, {
+              status: "completed",
+              completedAt,
+              timestamp: completedAt,
+            });
+          } catch {
+            // ignore cache failures
+          }
+
+          try {
+            await getArtifactsStore().update(item.tfsId, { selectedRepos });
+          } catch {
+            // ignore persistence failures
+          }
           
           // 更新状态
-          status.steps.repos = { status: 'completed', output: `02-repos.json` };
+          status.steps.repos = { status: "completed", output: "repos" };
           status.completedSteps.push('repos');
           status.updatedAt = new Date().toISOString();
-          await writePlanStatus(status, directory);
+          await writePlanStatus(status);
           
           setWizard({ 
             detection,
@@ -2094,12 +2463,15 @@ export function createTaskCenterStore(options: {
           });
           console.log(`[TaskCenter] [AutoPlan] Step 2/3: Repository detection completed, found ${selectedRepos.length} repos`);
         } else {
-          // 读取已存在的识别结果
-          const reposResult = await readReposResult(item.tfsId, directory);
-          if (reposResult) {
-            setWizard({ 
-              detection: reposResult.detection,
-              selectedRepos: reposResult.selectedRepos,
+          ensureAnalysisCache();
+          const cached = await AnalysisCache.get(item.tfsId);
+          const detection = cached?.data.detection ?? null;
+          const selectedRepos = (await readArtifact(item.tfsId))?.selectedRepos ?? [];
+
+          if (detection) {
+            setWizard({
+              detection,
+              selectedRepos,
               autoPlanProgress: 66,
             });
             console.log(`[TaskCenter] [AutoPlan] Step 2/3: Repository detection loaded from cache`);
@@ -2108,12 +2480,9 @@ export function createTaskCenterStore(options: {
 
         // 4. 步骤3：生成计划（如未完成）
         if (!status.completedSteps.includes('plan')) {
-          setWizard({ autoPlanStep: 'plan', autoPlanProgress: 70 });
-          console.log(`[TaskCenter] [AutoPlan] Step 3/3: Generating development plan...`);
-          
           const requirement = wizard.requirement;
           const selectedRepos = wizard.selectedRepos;
-          
+
           if (!requirement) {
             throw new Error('需求分析结果不存在');
           }
@@ -2121,105 +2490,74 @@ export function createTaskCenterStore(options: {
             throw new Error('请至少选择一个代码仓库');
           }
 
-          // 检查是否已有生成的文档
-          const trackPath = `forge/tracks/tfs-${item.tfsId}`;
-          const possibleFiles = [
-            `${trackPath}/intent.md`,
-            `${trackPath}/design.md`, 
-            `${trackPath}/tasks.md`,
-          ];
-
-          let existingFiles: string[] = [];
-          for (const filePath of possibleFiles) {
-            try {
-              await fsReadFile(filePath, directory);
-              existingFiles.push(filePath);
-            } catch {
-              // 文件不存在
-            }
+          const workspaceReady = await ensureWorkspaceForRepos(item, selectedRepos);
+          if (!workspaceReady) {
+            return;
           }
 
-          let intentContent = '';
-          let designContent = '';
-          let tasksContent = '';
+          setWizard({ autoPlanStep: 'plan', autoPlanProgress: 70 });
+          console.log(`[TaskCenter] [AutoPlan] Step 3/3: Generating development plan...`);
 
-          if (existingFiles.length > 0) {
-            // 读取已有文档
-            setWizard({ autoPlanProgress: 80 });
-            const fileResult = await readGeneratedFiles(possibleFiles, directory);
-            intentContent = fileResult.intent;
-            designContent = fileResult.design;
-            tasksContent = fileResult.tasks;
-            console.log(`[TaskCenter] [AutoPlan] Loaded existing plan documents`);
-          } else {
-            // 调用AI生成
+          let planDocs = await readPlanDocs(item.tfsId);
+
+          if (!planDocs || (!planDocs.intent && !planDocs.design && !planDocs.tasks)) {
             setWizard({ autoPlanProgress: 75 });
             const activeClient = options.client();
             if (!activeClient) {
               throw new Error('OpenWork client not connected');
             }
 
-            const prompt = buildGeneratePlanPrompt(item, requirement, selectedRepos, directory);
-            
+          const prompt = buildGeneratePlanPrompt(item, requirement, selectedRepos, directory);
+          console.log("[TaskCenter] Auto plan prompt:\n" + prompt);
             setWizard({ autoPlanProgress: 80 });
             const aiResponse = await callAIGeneratePlan(activeClient, prompt, options.getSelectedModel);
-            
             setWizard({ autoPlanProgress: 85 });
-            const generatedFiles = parseGeneratedFiles(aiResponse);
-            
-            if (generatedFiles.length > 0) {
-              const fileResult = await readGeneratedFiles(generatedFiles, directory);
-              intentContent = fileResult.intent;
-              designContent = fileResult.design;
-              tasksContent = fileResult.tasks;
+
+            const parsed = parseGeneratedPlan(aiResponse);
+            planDocs = {
+              intent: parsed.intent.trim(),
+              design: parsed.design.trim(),
+              tasks: parsed.tasks.trim(),
+            };
+            if (!planDocs.intent && !planDocs.design && !planDocs.tasks) {
+              throw new Error('未能生成开发计划文档');
             }
+            await writePlanDocs(item.tfsId, planDocs, selectedRepos);
           }
 
-          if (!intentContent && !designContent && !tasksContent) {
-            throw new Error('未能生成开发计划文档');
-          }
-
-          // 更新状态
-          status.steps.plan = { 
-            status: 'completed', 
-            output: ['intent.md', 'design.md', 'tasks.md'] 
+          status.steps.plan = {
+            status: 'completed',
+            output: ['intent.md', 'design.md', 'tasks.md']
           };
           status.completedSteps.push('plan');
           status.currentStep = 'completed';
           status.updatedAt = new Date().toISOString();
-          await writePlanStatus(status, directory);
+          await writePlanStatus(status);
 
-        setWizard({ 
-          autoPlanStep: 'completed',
-          autoPlanProgress: 100,
-          intent: intentContent,
-          design: designContent,
-          tasks: tasksContent,
-          step: 3, // 进入第三步显示结果
-        });
-        console.log(`[TaskCenter] [AutoPlan] Step 3/3: Plan generation completed`);
-        void autoSyncExistingPlanToTfs(item);
-      } else {
-        // 读取已存在的计划文档
-        const trackPath = `forge/tracks/tfs-${item.tfsId}`;
-        const possibleFiles = [
-          `${trackPath}/intent.md`,
-          `${trackPath}/design.md`, 
-          `${trackPath}/tasks.md`,
-        ];
-        const fileResult = await readGeneratedFiles(possibleFiles, directory);
-        
-        setWizard({ 
-          autoPlanStep: 'completed',
-          autoPlanProgress: 100,
-          intent: fileResult.intent,
-          design: fileResult.design,
-          tasks: fileResult.tasks,
-          step: 3,
-        });
-        console.log(`[TaskCenter] [AutoPlan] Plan documents loaded from cache`);
-        void autoSyncExistingPlanToTfs(item);
-      }
+          setWizard({
+            autoPlanStep: 'completed',
+            autoPlanProgress: 100,
+            intent: planDocs.intent ?? '',
+            design: planDocs.design ?? '',
+            tasks: planDocs.tasks ?? '',
+            step: 3,
+          });
+          console.log(`[TaskCenter] [AutoPlan] Step 3/3: Plan generation completed`);
+          shouldSync = true;
+        } else {
+          const planDocs = await readPlanDocs(item.tfsId);
+
+          setWizard({
+            autoPlanStep: 'completed',
+            autoPlanProgress: 100,
+            intent: planDocs?.intent ?? '',
+            design: planDocs?.design ?? '',
+            tasks: planDocs?.tasks ?? '',
+            step: 3,
+          });
+          console.log(`[TaskCenter] [AutoPlan] Plan documents loaded from cache`);
+          shouldSync = true;
+        }
 
       } catch (err) {
         const message = err instanceof Error ? err.message : '生成计划失败';
@@ -2256,8 +2594,18 @@ export function createTaskCenterStore(options: {
       }
 
       // 检查当前 wizard 中是否有分析结果
-      const requirement = wizard.requirement;
-      const detection = wizard.detection;
+      let requirement = wizard.requirement;
+      let detection = wizard.detection;
+      if (!requirement || !detection) {
+        try {
+          ensureAnalysisCache();
+          const cached = await AnalysisCache.get(item.tfsId);
+          requirement = requirement ?? cached?.data.requirement ?? null;
+          detection = detection ?? cached?.data.detection ?? null;
+        } catch {
+          // ignore cache failures
+        }
+      }
       console.log('[TaskCenter] Wizard data:', { 
         hasRequirement: !!requirement, 
         hasDetection: !!detection 
@@ -2338,6 +2686,7 @@ export function createTaskCenterStore(options: {
       console.log('[TaskCenter] Creating TFS client for plan...');
       const client = new TFSClient(tfsConfig);
       console.log('[TaskCenter] Calling createPlanTask...');
+      const planDocs = docs.intent || docs.design || docs.tasks ? docs : undefined;
       const result = await createPlanTask(
         client,
         item.tfsId,
@@ -2351,11 +2700,7 @@ export function createTaskCenterStore(options: {
           force,
           assignedTo: item.assignedTo,
         },
-        {
-          intent: wizard.intent,
-          design: wizard.design,
-          tasks: wizard.tasks,
-        }
+        planDocs
       );
       console.log('[TaskCenter] createPlanTask result:', result);
 
@@ -2469,47 +2814,47 @@ export function createTaskCenterStore(options: {
     selectedRepos: RepositoryMatch[];
     docs: { intent?: string; design?: string; tasks?: string };
   } | null> {
-    const directory = options.activeWorkspaceRoot().trim();
-    if (!directory) return null;
+    ensureAnalysisCache();
+    const cached = await AnalysisCache.get(item.tfsId);
+    let requirement = cached?.data.requirement ?? null;
+    let detection = cached?.data.detection ?? null;
 
-    const trackPath = `forge/tracks/tfs-${item.tfsId}`;
-    const possibleFiles = [
-      `${trackPath}/intent.md`,
-      `${trackPath}/design.md`,
-      `${trackPath}/tasks.md`,
-    ];
-
-    const docs = await readGeneratedFiles(possibleFiles, directory);
-    const hasDocs = !!(docs.intent || docs.design || docs.tasks);
-    if (!hasDocs) return null;
-
-    const [analysisResult, reposResult] = await Promise.all([
-      readAnalysisResult(item.tfsId, directory),
-      readReposResult(item.tfsId, directory),
-    ]);
-
-    let requirement = analysisResult?.requirement ?? null;
-    let detection = reposResult?.detection ?? null;
-    let selectedRepos = reposResult?.selectedRepos ?? [];
+    const artifact = await readArtifact(item.tfsId);
+    let docs = artifact?.planDocs ?? {};
+    let selectedRepos = artifact?.selectedRepos ?? [];
 
     if (!requirement || (!detection && selectedRepos.length === 0)) {
-      try {
-        ensureAnalysisCache();
-        const cached = await AnalysisCache.get(item.tfsId);
-        if (!requirement && cached?.data.requirement) {
-          requirement = cached.data.requirement;
+      if (requirement || detection) {
+        try {
+          const completedAt = Date.now();
+          const patch: Partial<AnalysisCacheData> = {};
+          if (requirement) patch.requirement = requirement;
+          if (detection) patch.detection = detection;
+          await writeAnalysisCache(item.tfsId, patch, {
+            status: "completed",
+            completedAt,
+            timestamp: completedAt,
+          });
+        } catch {
+          // ignore cache failures
         }
-        if (!detection && cached?.data.detection) {
-          detection = cached.data.detection;
-        }
-      } catch {
-        // ignore cache failures
       }
     }
 
     if (selectedRepos.length === 0 && detection?.primary?.length) {
       selectedRepos = detection.primary.filter((repo) => repo.confidence > 0.6);
     }
+
+    if (selectedRepos.length > 0) {
+      try {
+        await getArtifactsStore().update(item.tfsId, { selectedRepos });
+      } catch {
+        // ignore persistence failures
+      }
+    }
+
+    const hasDocs = !!(docs.intent || docs.design || docs.tasks);
+    if (!hasDocs) return null;
 
     return {
       requirement,
@@ -2521,6 +2866,14 @@ export function createTaskCenterStore(options: {
 
   async function autoSyncExistingPlanToTfs(item: TaskCenterItem): Promise<void> {
     if (!autoAnalysisConfig().autoSyncToTfs) return;
+
+    const isWizardActiveForItem = wizard.currentWorkItemId === item.tfsId;
+    const isWizardGenerating = wizard.isLoading || wizard.isAutoGenerating;
+    const isAutoPlanRunning = wizard.autoPlanStep && wizard.autoPlanStep !== "completed" && wizard.autoPlanStep !== "idle";
+    if (isWizardActiveForItem && (isWizardGenerating || isAutoPlanRunning)) {
+      console.log(`[TaskCenter] Auto-sync deferred for #${item.tfsId} - plan generation in progress`);
+      return;
+    }
 
     const baseStatus = tfsSyncState[item.tfsId];
     const isFullySynced = baseStatus?.analysisSynced && baseStatus?.planSynced;
@@ -2679,44 +3032,39 @@ export function createTaskCenterStore(options: {
     }
   };
 
+  type TaskSource = { source: "artifact"; content: string };
+
+  const resolveTasksSource = async (item: TaskCenterItem): Promise<TaskSource | null> => {
+    const docs = await readPlanDocs(item.tfsId);
+    if (docs?.tasks) {
+      return { source: "artifact", content: docs.tasks };
+    }
+    return null;
+  };
+
+  const updatePlanTasksContent = async (tfsId: number, content: string) => {
+    const existing = await readPlanDocs(tfsId);
+    const generatedAt = existing?.generatedAt;
+    await writePlanDocs(tfsId, {
+      ...(existing ?? {}),
+      tasks: content,
+      generatedAt,
+    });
+  };
+
   const loadTasks = async (item: TaskCenterItem) => {
-    const directory = options.activeWorkspaceRoot().trim();
-    if (!directory) return;
-
-    // Check all possible paths - generatePlan uses tfs-{id} directly
-    const trackPaths = [
-      `forge/tracks/tfs-${item.tfsId}/tasks.md`,                    // generatePlan 生成的路径
-      `forge/tracks/task-center-requirement-analyzer/tfs-${item.tfsId}/tasks.md`,
-      `forge/tracks/workitem-autorun/tfs-${item.tfsId}/tasks.md`,
-    ];
-
     try {
-      // Try to read tasks.md from all possible paths using fsReadFile
-      let output: string | null = null;
-      
-      for (const tasksPath of trackPaths) {
-        try {
-          const result = await fsReadFile(tasksPath, directory);
-          if (result.content && result.content.length > 0) {
-            output = result.content;
-            console.log(`[TaskCenter] Loaded tasks from ${tasksPath}`);
-            break; // Found valid tasks file
-          }
-        } catch (err) {
-          // Path doesn't exist, try next
-          continue;
-        }
+      const source = await resolveTasksSource(item);
+      if (!source) {
+        console.warn("[TaskCenter] No tasks found for item", item.tfsId);
+        setTasks([]);
+        return;
       }
 
-      if (output) {
-        const parsed = parseTasks(output);
-        setTasks(parsed);
-        const nextIndex = parsed.findIndex(t => t.status === "pending" || t.status === "in-progress");
-        setCurrentTaskIndex(nextIndex >= 0 ? nextIndex : 0);
-      } else {
-        console.warn("[TaskCenter] No tasks.md found for item", item.tfsId);
-        setTasks([]);
-      }
+      const parsed = parseTasks(source.content);
+      setTasks(parsed);
+      const nextIndex = parsed.findIndex(t => t.status === "pending" || t.status === "in-progress");
+      setCurrentTaskIndex(nextIndex >= 0 ? nextIndex : 0);
     } catch (err) {
       console.warn("Failed to load tasks:", err);
       setTasks([]);
@@ -2727,119 +3075,35 @@ export function createTaskCenterStore(options: {
     const activeClient = options.client();
     if (!activeClient || executing()) return;
 
-    const directory = options.activeWorkspaceRoot().trim();
-    // Try to find tasks.md in possible locations
-    const possiblePaths = [
-      `forge/tracks/tfs-${item.tfsId}/tasks.md`,
-      `forge/tracks/task-center-requirement-analyzer/tfs-${item.tfsId}/tasks.md`,
-      `forge/tracks/workitem-autorun/tfs-${item.tfsId}/tasks.md`,
-    ];
-    let tasksPath = possiblePaths[0]; // default
-
     setExecuting(true);
-    
+
     try {
-      const sessionApi = activeClient.session as typeof activeClient.session & {
-        shellAsync: (input: {
-          sessionID: string;
-          command: string;
-          agent?: string;
-          directory?: string;
-        }) => Promise<unknown>;
-        shell?: (input: {
-          sessionID: string;
-          command: string;
-          agent?: string;
-          directory?: string;
-        }) => Promise<unknown>;
-      };
-
-      // Create session for file operations
-      const result = await sessionApi.create({ directory: directory || undefined });
-      const session = unwrap(result) as { id: string };
-      const sessionID = session.id;
-
-      // Find the correct tasks.md path
-      for (const path of possiblePaths) {
-        try {
-          const checkResult = await sessionApi.shellAsync({
-            sessionID,
-            command: `test -f ${path} && echo "exists"`,
-            agent: "openwork",
-            directory: directory || undefined,
-          });
-          const output = extractOutput(checkResult);
-          if (output?.includes("exists")) {
-            tasksPath = path;
-            console.log(`[TaskCenter] Found tasks.md at: ${tasksPath}`);
-            break;
-          }
-        } catch {
-          // Path doesn't exist, try next
-          continue;
-        }
+      const source = await resolveTasksSource(item);
+      if (!source) {
+        throw new Error("Tasks not found");
       }
 
-      // Read current tasks.md
-      const readInput = {
-        sessionID,
-        command: `cat ${tasksPath}`,
-        agent: "openwork",
-        directory: directory || undefined,
-      };
-
-      const readResult = sessionApi.shellAsync
-        ? await sessionApi.shellAsync(readInput)
-        : sessionApi.shell
-          ? await sessionApi.shell(readInput)
-          : null;
-
-      if (!readResult) {
-        throw new Error("Cannot read tasks.md");
-      }
-
-      const content = extractOutput(readResult);
-      if (!content) {
-        throw new Error("Tasks.md is empty");
-      }
-
-      // Update task status to in-progress
-      const updated = updateTaskStatus(content, taskIndex, "in-progress");
-      
-      // Write back
-      const writeInput = {
-        sessionID,
-        command: `cat > ${tasksPath} << 'EOF'
-${updated}
-EOF`,
-        agent: "openwork",
-        directory: directory || undefined,
-      };
-
-      await sessionApi.shellAsync?.(writeInput) ?? sessionApi.shell?.(writeInput);
-
-      // Update local state
-      setTasks(prev => prev.map((t, i) => i === taskIndex ? { ...t, status: "in-progress" } : t));
+      const updated = updateTaskStatus(source.content, taskIndex, "in-progress");
+      await updatePlanTasksContent(item.tfsId, updated);
+      const parsed = parseTasks(updated);
+      setTasks(parsed);
       setCurrentTaskIndex(taskIndex);
 
-      // Update automation state
       setAutomationState(item.tfsId, {
         status: "progress",
         stage: getStageForTask(taskIndex),
         subStage: `task-${taskIndex}`,
-        sessionId: sessionID,
+        sessionId: null,
         blockedReason: null,
         updatedAt: Date.now(),
       });
 
-      // Create OpenCode session for task execution
-      const task = tasks()[taskIndex];
+      const task = parsed[taskIndex];
       if (task) {
         const prompt = `执行任务 ${taskIndex + 1}：${task.title}\n\n工作项: #${item.tfsId}\n\n${task.description}`;
         options.setPrompt(prompt);
         options.createSessionAndOpen();
       }
-
     } catch (error) {
       const message = error instanceof Error ? error.message : "Task execution failed.";
       setError(message);
@@ -2853,76 +3117,20 @@ EOF`,
     const activeClient = options.client();
     if (!activeClient || executing()) return;
 
-    const directory = options.activeWorkspaceRoot().trim();
-    const tasksPath = `forge/tracks/workitem-autorun/tfs-${item.tfsId}/tasks.md`;
-
     setExecuting(true);
 
     try {
-      const sessionApi = activeClient.session as typeof activeClient.session & {
-        shellAsync?: (input: {
-          sessionID: string;
-          command: string;
-          agent?: string;
-          directory?: string;
-        }) => Promise<unknown>;
-        shell?: (input: {
-          sessionID: string;
-          command: string;
-          agent?: string;
-          directory?: string;
-        }) => Promise<unknown>;
-      };
-
-      const result = await sessionApi.create({ directory: directory || undefined });
-      const session = unwrap(result);
-      const sessionID = session.id;
-
-      // Read current tasks.md
-      const readInput = {
-        sessionID,
-        command: `cat ${tasksPath}`,
-        agent: "openwork",
-        directory: directory || undefined,
-      };
-
-      const readResult = sessionApi.shellAsync
-        ? await sessionApi.shellAsync(readInput)
-        : sessionApi.shell
-          ? await sessionApi.shell(readInput)
-          : null;
-
-      if (!readResult) {
-        throw new Error("Cannot read tasks.md");
+      const source = await resolveTasksSource(item);
+      if (!source) {
+        throw new Error("Tasks not found");
       }
 
-      const content = extractOutput(readResult);
-      if (!content) {
-        throw new Error("Tasks.md is empty");
-      }
+      const updated = updateTaskStatus(source.content, taskIndex, "completed");
+      await updatePlanTasksContent(item.tfsId, updated);
+      const parsed = parseTasks(updated);
+      setTasks(parsed);
 
-      // Mark current task as completed
-      const updated = updateTaskStatus(content, taskIndex, "completed");
-
-      // Write back
-      const writeInput = {
-        sessionID,
-        command: `cat > ${tasksPath} << 'EOF'
-${updated}
-EOF`,
-        agent: "openwork",
-        directory: directory || undefined,
-      };
-
-      await sessionApi.shellAsync?.(writeInput) ?? sessionApi.shell?.(writeInput);
-
-      // Update local state
-      setTasks(prev => prev.map((t, i) => i === taskIndex ? { ...t, status: "completed" } : t));
-
-      // Check if all tasks completed
-      const allTasks = tasks().map((t, i) => i === taskIndex ? { ...t, status: "completed" as const } : t);
-      const allCompleted = allTasks.every(t => t.status === "completed");
-
+      const allCompleted = parsed.every(t => t.status === "completed");
       if (allCompleted) {
         setAutomationState(item.tfsId, {
           status: "done",
@@ -2933,13 +3141,11 @@ EOF`,
           updatedAt: Date.now(),
         });
       } else {
-        // Move to next task
-        const nextIndex = allTasks.findIndex(t => t.status === "pending");
+        const nextIndex = parsed.findIndex(t => t.status === "pending");
         if (nextIndex >= 0) {
           setCurrentTaskIndex(nextIndex);
         }
       }
-
     } catch (error) {
       const message = error instanceof Error ? error.message : "Complete task step failed.";
       setError(message);
