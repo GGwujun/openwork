@@ -39,6 +39,10 @@
       "sidecars/openwork-server",
       "sidecars/owpenbot",
       "sidecars/openwrk"
+    ],
+    "resources": [
+      "resources/skills/forge",
+      "resources/skills/skill-creator"
     ]
   },
   "plugins": {
