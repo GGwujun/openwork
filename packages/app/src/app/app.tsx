@@ -4845,6 +4845,7 @@ export default function App() {
     onResumePlanExecution: taskCenterStore.resumePlanExecution,
     onCancelPlanExecution: taskCenterStore.cancelPlanExecution,
     onAnswerPlanQuestion: taskCenterStore.answerPlanQuestion,
+    onPreparePlanExecution: taskCenterStore.preparePlanExecution,
     autoAnalysisMap: taskCenterStore.autoAnalysisMap,
     queueStatus: taskCenterStore.queueStatus(),
     onReanalyze: taskCenterStore.reanalyzeWorkItem,
@@ -4860,6 +4861,7 @@ export default function App() {
     wizard: taskCenterStore.wizard,
     wizardActions: taskCenterStore.wizardActions,
     clearAutomationState: taskCenterStore.clearAutomationState,
+    clearPlanExecutionState: taskCenterStore.clearPlanExecutionState,
     getTfsSyncStatus: taskCenterStore.getTfsSyncStatus,
     setView,
   });

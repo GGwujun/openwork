@@ -102,6 +102,7 @@ export type TaskCenterViewProps = {
   onResumePlanExecution?: (tfsId: number) => void;
   onCancelPlanExecution?: (tfsId: number) => void;
   onAnswerPlanQuestion?: (tfsId: number, answer: string) => void | Promise<void>;
+  onPreparePlanExecution?: (tfsId: number) => void;
   // Requirement Analysis Wizard props
   wizard?: PlanWizardState;
   wizardActions?: {
@@ -123,6 +124,7 @@ export type TaskCenterViewProps = {
   onReanalyze?: (item: TaskCenterItem) => void;
   // Dev/Test props
   clearAutomationState?: () => void;
+  clearPlanExecutionState?: () => void;
 };
 
 const STATUS_ORDER: TaskCenterStatus[] = ["todo", "progress", "done", "failed", "archived"];
@@ -394,13 +396,46 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
   };
 
   const handleOpenExecution = (item: TaskCenterItem) => {
+    console.log("[TaskCenter] [UI] Open execution requested", {
+      tfsId: item.tfsId,
+      hasExecutionState: Boolean(props.planExecutionState?.executions?.[item.tfsId]),
+      hasSetPanelOpen: Boolean(props.setPlanExecutionPanelOpen),
+      hasSetItemId: Boolean(props.setPlanExecutionItemId),
+    });
+    props.onPreparePlanExecution?.(item.tfsId);
     props.setPlanExecutionItemId?.(item.tfsId);
     props.setPlanExecutionPanelOpen?.(true);
   };
 
   const handleStartPlanExecution = (item: TaskCenterItem) => {
+    console.log("[TaskCenter] [UI] Start plan execution clicked", {
+      tfsId: item.tfsId,
+      hasStartHandler: Boolean(props.onStartPlanExecution),
+    });
     handleOpenExecution(item);
     props.onStartPlanExecution?.(item);
+  };
+
+  const getExecutionState = (item: TaskCenterItem) => {
+    const state = props.planExecutionState?.executions?.[item.tfsId] ?? null;
+    if (!state) return null;
+    if (state.status === "idle") return null;
+    const isActive = state.status === "running" || state.status === "waiting";
+    if (item.status === "todo" && !isActive) return null;
+    const hasInfo =
+      state.status !== "idle" ||
+      Boolean(state.sessionId) ||
+      Boolean(state.archivePath) ||
+      Boolean(state.error) ||
+      Boolean(state.result) ||
+      (Array.isArray(state.messages) && state.messages.length > 0);
+    return hasInfo ? state : null;
+  };
+
+  const canStartExecution = (item: TaskCenterItem) => {
+    const state = getExecutionState(item);
+    if (!state) return true;
+    return state.status !== "running" && state.status !== "waiting";
   };
 
   const handleClosePanel = () => {
@@ -427,6 +462,13 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
     e.stopPropagation();
     console.log('[TaskCenter] Clear button clicked, clearing automation state...');
     props.clearAutomationState?.();
+  };
+
+  const handleClearPlanExecution = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    console.log('[TaskCenter] Clear button clicked, clearing plan execution state...');
+    props.clearPlanExecutionState?.();
   };
 
   return (
@@ -466,6 +508,15 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
               >
                 <Trash2 size={14} />
                 清除
+              </Button>
+              <Button
+                variant="outline"
+                class="h-8 px-3 text-[11px] text-amber-700 border-amber-200 hover:bg-amber-50"
+                onClick={handleClearPlanExecution}
+                title="清空开发状态（测试用）"
+              >
+                <Trash2 size={14} />
+                清除开发状态
               </Button>
               <Button
                 variant="outline"
@@ -698,7 +749,7 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                     <ExternalLink size={12} />
                                     {translate("task_center.view_plan")}
                                   </Button>
-                                  <Show when={props.planExecutionState?.executions?.[item.tfsId]}>
+                                  <Show when={getExecutionState(item)}>
                                     <Button
                                       variant="outline"
                                       class="h-8 px-3 text-xs"
@@ -707,14 +758,16 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                       执行监控
                                     </Button>
                                   </Show>
-                                  <Button
-                                    variant="primary"
-                                    class="h-8 px-3 text-xs"
-                                    onClick={() => handleStartPlanExecution(item)}
-                                  >
-                                    <Play size={12} />
-                                    开始开发
-                                  </Button>
+                                  <Show when={canStartExecution(item)}>
+                                    <Button
+                                      variant="primary"
+                                      class="h-8 px-3 text-xs"
+                                      onClick={() => handleStartPlanExecution(item)}
+                                    >
+                                      <Play size={12} />
+                                      开始开发
+                                    </Button>
+                                  </Show>
                                 </div>
                               </Show>
                             </div>
@@ -731,7 +784,7 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                   <ExternalLink size={12} />
                                   {translate("task_center.view_plan")}
                                 </Button>
-                                <Show when={props.planExecutionState?.executions?.[item.tfsId]}>
+                                <Show when={getExecutionState(item)}>
                                   <Button
                                     variant="outline"
                                     class="h-8 px-3 text-xs"
@@ -740,14 +793,16 @@ export default function TaskCenterView(props: TaskCenterViewProps) {
                                     执行监控
                                   </Button>
                                 </Show>
-                                <Button
-                                  variant="primary"
-                                  class="h-8 px-3 text-xs"
-                                  onClick={() => handleStartPlanExecution(item)}
-                                >
-                                  <Play size={12} />
-                                  开始开发
-                                </Button>
+                                <Show when={canStartExecution(item)}>
+                                  <Button
+                                    variant="primary"
+                                    class="h-8 px-3 text-xs"
+                                    onClick={() => handleStartPlanExecution(item)}
+                                  >
+                                    <Play size={12} />
+                                    开始开发
+                                  </Button>
+                                </Show>
                               </div>
                             </div>
                           </Show>
