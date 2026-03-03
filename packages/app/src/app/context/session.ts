@@ -656,8 +656,7 @@ export function createSessionStore(options: {
   const activePermission = createMemo(() => {
     const id = options.selectedSessionId();
     if (id) {
-      const scoped = store.pendingPermissions.find((perm) => perm.sessionID === id) ?? null;
-      if (scoped) return scoped;
+      return store.pendingPermissions.find((perm) => perm.sessionID === id) ?? null;
     }
     return store.pendingPermissions[0] ?? null;
   });
@@ -665,8 +664,7 @@ export function createSessionStore(options: {
   const activeQuestion = createMemo(() => {
     const id = options.selectedSessionId();
     if (id) {
-      const scoped = store.pendingQuestions.find((q) => q.sessionID === id) ?? null;
-      if (scoped) return scoped;
+      return store.pendingQuestions.find((q) => q.sessionID === id) ?? null;
     }
     return store.pendingQuestions[0] ?? null;
   });
