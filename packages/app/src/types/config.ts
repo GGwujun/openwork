@@ -86,6 +86,59 @@ export const subscribeAutoAnalysisConfig = (listener: (config: AutoAnalysisConfi
   return () => listeners.delete(listener);
 };
 
+// ========== Execution Configuration ==========
+
+export type ExecutionDocDeliveryMode = "inline-docs" | "forge-files";
+
+export interface ExecutionConfig {
+  docDeliveryMode: ExecutionDocDeliveryMode;
+}
+
+export const DEFAULT_EXECUTION_CONFIG: ExecutionConfig = {
+  docDeliveryMode: "inline-docs",
+};
+
+const EXECUTION_CONFIG_KEY = "openwork.executionConfig";
+const executionListeners = new Set<(config: ExecutionConfig) => void>();
+
+export const validateExecutionConfig = (value: Partial<ExecutionConfig>): ExecutionConfig => {
+  const mode = value.docDeliveryMode;
+  return {
+    docDeliveryMode: mode === "forge-files" ? "forge-files" : "inline-docs",
+  };
+};
+
+export const getExecutionConfig = (): ExecutionConfig => {
+  if (typeof window === "undefined") return DEFAULT_EXECUTION_CONFIG;
+  try {
+    const raw = window.localStorage.getItem(EXECUTION_CONFIG_KEY);
+    if (!raw) return DEFAULT_EXECUTION_CONFIG;
+    const parsed = JSON.parse(raw) as Partial<ExecutionConfig>;
+    return validateExecutionConfig(parsed);
+  } catch {
+    return DEFAULT_EXECUTION_CONFIG;
+  }
+};
+
+export const setExecutionConfig = (patch: Partial<ExecutionConfig>): ExecutionConfig => {
+  const current = getExecutionConfig();
+  const next = validateExecutionConfig({ ...current, ...patch });
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(EXECUTION_CONFIG_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  }
+  executionListeners.forEach((listener) => listener(next));
+  return next;
+};
+
+export const subscribeExecutionConfig = (listener: (config: ExecutionConfig) => void) => {
+  executionListeners.add(listener);
+  return () => executionListeners.delete(listener);
+};
+
 
 // ========== TFS Configuration ==========
 
