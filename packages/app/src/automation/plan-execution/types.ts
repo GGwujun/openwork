@@ -48,6 +48,7 @@ export interface ExecutionOptions {
   requireArchive?: boolean;
   allowQuestions?: boolean;
   maxRetries?: number;
+  docDeliveryMode?: "inline-docs" | "forge-files";
 }
 
 export interface ExecutionContext {

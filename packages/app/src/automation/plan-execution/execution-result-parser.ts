@@ -4,6 +4,7 @@ const archivePathPattern = /forge\/archives\/\d{4}-\d{2}-\d{2}-tfs-\d+/i;
 const commitHashPattern = /\b[0-9a-f]{7,40}\b/i;
 const progressPattern = /\[PROGRESS\]\s*done=(\d+)\s*\/\s*(\d+)\s*task=([^\n]+)/i;
 const progressAltPattern = /任务\s*(\d+)\s*\/\s*(\d+)\s*完成[:：]?\s*(.*)/i;
+const taskUpdateDonePattern = /done\s*=\s*(\d+)\s*\/\s*(\d+)/i;
 const errorPattern = /\[ERROR\]|执行失败|failed|error/i;
 
 const extractLines = (messages: ExecutionMessage[]) =>
@@ -24,9 +25,10 @@ const extractProgressStats = (messages: ExecutionMessage[]) => {
   for (const message of messages) {
     const text = message.content || "";
     const match = text.match(progressPattern) ?? text.match(progressAltPattern);
-    if (!match) continue;
-    const current = Number.parseInt(match[1] ?? "0", 10);
-    const total = Number.parseInt(match[2] ?? "0", 10);
+    const taskUpdateMatch = text.match(taskUpdateDonePattern);
+    if (!match && !taskUpdateMatch) continue;
+    const current = Number.parseInt((match?.[1] ?? taskUpdateMatch?.[1] ?? "0"), 10);
+    const total = Number.parseInt((match?.[2] ?? taskUpdateMatch?.[2] ?? "0"), 10);
     if (Number.isFinite(current)) maxCurrent = Math.max(maxCurrent, current);
     if (Number.isFinite(total)) maxTotal = Math.max(maxTotal, total);
   }
@@ -51,12 +53,12 @@ export class ExecutionResultParser {
     const progressStats = extractProgressStats(messages);
 
     const archiveMatch = combined.match(archivePathPattern);
-    const doneLine = findLastMatch(lines, (line) => /\[DONE\]|执行完成|完成全部任务/i.test(line));
+    const doneLine = findLastMatch(lines, (line) => /\[DONE\]|\[\[EXEC_DONE\]\]|执行完成|完成全部任务/i.test(line));
     const verificationOk = /forge-verify|verification/i.test(combined) && /通过|success|ok|passed/i.test(combined);
     const commitLine = findLastMatch(lines, (line) => /commit|提交/i.test(line));
     const commitHash = commitLine?.match(commitHashPattern)?.[0] ?? combined.match(commitHashPattern)?.[0];
     const errorLine = findLastMatch(lines, (line) => errorPattern.test(line));
-    const success = /\[DONE\]|执行完成|完成全部任务/i.test(combined);
+    const success = /\[DONE\]|\[\[EXEC_DONE\]\]|执行完成|完成全部任务/i.test(combined);
     const completedTasks =
       success && progressStats.totalTasks
         ? progressStats.totalTasks
