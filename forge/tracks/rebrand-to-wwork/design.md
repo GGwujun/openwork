@@ -98,8 +98,15 @@ openwrk            →  wwork
 ```
 src/commands/
 ├── mod.rs          # 更新 pub mod 声明
+├── openwork_server.rs → 重命名为 wwork_server.rs
 ├── openwrk.rs      → 重命名为 wwork.rs
 └── owpenbot.rs     → 重命名为 wwbot.rs
+```
+
+```
+src/
+├── openwork_server/ → 重命名为 wwork_server/
+└── openwrk/         → 重命名为 wwork/
 ```
 
 ### 类型重命名

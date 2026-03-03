@@ -1,5 +1,17 @@
 # Tasks: OpenWork → Wwork 品牌改名
 
+## Phase 0: 近期更新核对 (10分钟)
+
+### 0.1 全局扫描与新增命中
+- [ ] 重新扫描关键字：`OpenWork` / `openwork` / `openwrk` / `owpenbot`
+- [ ] 记录新增命中文件并纳入修改范围：
+  - [ ] `packages/desktop/src-tauri/src/openwork_server/*`
+  - [ ] `packages/desktop/src-tauri/src/commands/openwork_server.rs`
+  - [ ] `packages/headless/bin/openwrk`
+  - [ ] `.opencode/openwork.json`
+  - [ ] `.opencode/agents/openwork.md`
+- [ ] 对新增文件给出“改名/保留”结论并记录在保留项清单
+
 ## Phase 1: 包名与配置 (30分钟)
 
 ### 1.1 Root 项目配置
@@ -104,16 +116,24 @@
 - [ ] 修改 `packages/desktop/scripts/prepare-sidecar.mjs`
   - [ ] 更新 sidecar 文件名引用
 
-### 3.4 Headless 依赖引用
+### 3.4 Desktop 构建脚本
+- [ ] 修改 `packages/desktop/src-tauri/build.rs`
+  - [ ] 更新 sidecar 文件名与产物名
+
+### 3.5 Owpenbot 构建脚本
+- [ ] 修改 `packages/headless/scripts/build-owpenbot.mjs`
+  - [ ] 更新产物名与输出路径
+
+### 3.6 Headless 依赖引用
 - [ ] 修改 `packages/headless/package.json`
   - [ ] `"openwork-server": "x.x.x"` → `"wwork-server": "x.x.x"`
   - [ ] `"owpenwork": "x.x.x"` → `"wwbot": "x.x.x"`
 
-### 3.5 Server CLI 名称
+### 3.7 Server CLI 名称
 - [ ] 修改 `packages/server/src/cli.ts`
   - [ ] 检查 CLI 名称和帮助文本
 
-### 3.6 验证 Phase 3
+### 3.8 验证 Phase 3
 - [ ] 检查所有构建脚本可执行
 - [ ] Sidecar 文件名映射正确
 
@@ -171,28 +191,35 @@
 
 ## Phase 5: Rust 代码 (30分钟)
 
-### 5.1 模块文件重命名
+### 5.1 openwork_server 模块重命名
+- [ ] 重命名 `packages/desktop/src-tauri/src/commands/openwork_server.rs` → `wwork_server.rs`
+- [ ] 重命名 `packages/desktop/src-tauri/src/openwork_server/` → `wwork_server/`
+
+### 5.2 模块文件重命名
 - [ ] 重命名 `packages/desktop/src-tauri/src/commands/openwrk.rs` → `wwork.rs`
 - [ ] 重命名 `packages/desktop/src-tauri/src/commands/owpenbot.rs` → `wwbot.rs`
+- [ ] 如存在 `packages/desktop/src-tauri/src/openwrk/`，重命名为 `wwork/`
 
-### 5.2 模块声明更新
+### 5.3 模块声明更新
 - [ ] 修改 `packages/desktop/src-tauri/src/commands/mod.rs`
   - [ ] `pub mod openwrk;` → `pub mod wwork;`
   - [ ] `pub mod owpenbot;` → `pub mod wwbot;`
+  - [ ] `pub mod openwork_server;` → `pub mod wwork_server;`
 
-### 5.3 lib.rs 更新
+### 5.4 lib.rs 更新
 - [ ] 修改 `packages/desktop/src-tauri/src/lib.rs`
   - [ ] `openwrk_status` → `wwork_status`
   - [ ] `OpenwrkManager` → `WworkManager`
   - [ ] `openwrk` 变量名 → `wwork`
   - [ ] `OwpenbotManager` → `WwbotManager`
   - [ ] `owpenbot` 变量名 → `wwbot`
+  - [ ] `openwork_server` → `wwork_server`
 
-### 5.4 类型定义
+### 5.5 类型定义
 - [ ] 修改 `packages/desktop/src-tauri/src/types.rs`
   - [ ] 检查并更新相关类型名
 
-### 5.5 验证 Phase 5
+### 5.6 验证 Phase 5
 - [ ] `cargo check` 成功
 - [ ] `cargo build` 成功
 
@@ -226,8 +253,8 @@
 
 ### 7.1 Logo 组件
 - [ ] 重命名 `packages/app/src/app/components/openwork-logo.tsx` → `wwork-logo.tsx`
-- [ ] 更新组件内部的 SVG/文本
-- [ ] 更新所有导入引用
+  - [ ] 更新组件内部的 SVG/文本
+  - [ ] 更新所有导入引用
 
 ### 7.2 Tauri 图标
 - [ ] 准备新的图标集（多尺寸 PNG + ICO + ICNS）
@@ -236,6 +263,7 @@
 ### 7.3 应用公共资源
 - [ ] 替换 `packages/app/public/logo.*`
 - [ ] 替换 `packages/app/public/favicon.*`
+- [ ] 替换 `packages/app/public/openwork-logo*.svg`
 
 ### 7.4 Landing 页面
 - [ ] 替换 `packages/landing/public/` 中的 logo
