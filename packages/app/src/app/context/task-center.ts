@@ -5,12 +5,14 @@ import type { Client, TaskCenterItem, TaskCenterStatus, TaskCenterStage, TaskCen
 import type { TFSConfig, FormattedWorkItem } from "../../api/tfs";
 import { TFSClient, DEFAULT_SERVER_URL } from "../../api/tfs";
 import { Persist, persisted } from "../utils/persist";
-import { safeParseJson } from "../utils";
+import { isTauriRuntime, safeParseJson } from "../utils";
+import { usePlatform } from "./platform";
 import { unwrap } from "../lib/opencode";
 import { parseTasks, updateTaskStatus, type ParsedTask } from "../lib/tasks-parser";
 
 // Note: fs plugin disabled - rely on AI to write files
 // import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs';
+import { BaseDirectory, mkdir, writeTextFile } from "@tauri-apps/plugin-fs";
 
 import { 
   TFS_CONFIG_PATH, 
@@ -30,7 +32,16 @@ import type {
   AnalysisResult,
   AnalysisPriority,
 } from '../../types/requirement-analyzer';
-import { getAutoAnalysisConfig, subscribeAutoAnalysisConfig, getTfsUserConfig, subscribeTfsUserConfig, type TFSUserConfig } from '../../types/config';
+import {
+  getAutoAnalysisConfig,
+  subscribeAutoAnalysisConfig,
+  getExecutionConfig,
+  subscribeExecutionConfig,
+  getTfsUserConfig,
+  subscribeTfsUserConfig,
+  type ExecutionConfig,
+  type TFSUserConfig,
+} from '../../types/config';
 
 // AI Generate Plan
 import {
@@ -77,6 +88,55 @@ import {
 
 // 删除未使用的导入
 // import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs';
+
+const PLAN_EXECUTION_ALLOW_QUESTIONS = false;
+const PLAN_EXECUTION_ALLOW_PAUSE = false;
+const PLAN_EXECUTION_SKIP_VERIFICATION = true;
+
+const ensureForgeTrackDocs = async (tfsId: number, docs: TaskCenterPlanDocs) => {
+  if (!isTauriRuntime()) return;
+  const trackPath = getTrackPath(tfsId);
+  const trimmedIntent = docs.intent?.trim();
+  const trimmedDesign = docs.design?.trim();
+  const trimmedTasks = docs.tasks?.trim();
+  if (!trimmedIntent && !trimmedDesign && !trimmedTasks) return;
+
+  try {
+    await mkdir(`${trackPath}/contracts`, {
+      baseDir: BaseDirectory.AppLocalData,
+      recursive: true,
+    });
+    const writes: Promise<void>[] = [];
+    if (trimmedIntent) {
+      writes.push(
+        writeTextFile(`${trackPath}/intent.md`, trimmedIntent, {
+          baseDir: BaseDirectory.AppLocalData,
+        })
+      );
+    }
+    if (trimmedDesign) {
+      writes.push(
+        writeTextFile(`${trackPath}/design.md`, trimmedDesign, {
+          baseDir: BaseDirectory.AppLocalData,
+        })
+      );
+    }
+    if (trimmedTasks) {
+      writes.push(
+        writeTextFile(`${trackPath}/tasks.md`, trimmedTasks, {
+          baseDir: BaseDirectory.AppLocalData,
+        })
+      );
+    }
+    await Promise.all(writes);
+    console.log("[TaskCenter] [PlanExec] Track docs ensured", { tfsId, trackPath });
+  } catch (error) {
+    console.warn("[TaskCenter] [PlanExec] Failed to ensure track docs", {
+      tfsId,
+      error,
+    });
+  }
+};
 
 // Embedded Automation Engine - 内嵌式自动化引擎
 import {
@@ -693,6 +753,19 @@ function formatToTaskCenterItem(item: FormattedWorkItem): TaskCenterItem {
   };
 }
 
+function normalizeTaskCenterItemStatus(item: TaskCenterItem): TaskCenterItem {
+  if (item.status === "todo") {
+    return {
+      ...item,
+      stage: "idle",
+      subStage: undefined,
+      blockedReason: null,
+      sessionId: null,
+    };
+  }
+  return item;
+}
+
 export function createTaskCenterStore(options: {
   client: () => Client | null;
   getSelectedModel?: () => { providerID: string; modelID: string } | null;
@@ -727,6 +800,22 @@ export function createTaskCenterStore(options: {
   const planExecutionState = planExecutionStore.store;
   const [planExecutionPanelOpen, setPlanExecutionPanelOpen] = createSignal(false);
   const [planExecutionItemId, setPlanExecutionItemId] = createSignal<number | null>(null);
+  const platform = usePlatform();
+
+  const clearPlanExecutionPersisted = async () => {
+    const target = Persist.global("task-center.plan-execution");
+    const storageName = target.storage;
+    const storage = platform.storage?.(storageName);
+    if (storage) {
+      await Promise.resolve(storage.removeItem(target.key));
+      return;
+    }
+    if (storageName) {
+      localStorage.removeItem(`${storageName}:${target.key}`);
+      return;
+    }
+    localStorage.removeItem(target.key);
+  };
 
   // Requirement Analysis Wizard State - 需求分析向导状态
   const [wizard, setWizard] = createStore<PlanWizardState>({
@@ -776,11 +865,16 @@ export function createTaskCenterStore(options: {
   AutoAnalyzer.configure({ getAnalyzer: getRequirementAnalyzer });
   const analysisQueue = AnalysisQueue.getInstance();
   const [autoAnalysisConfig, setAutoAnalysisConfigSignal] = createSignal(getAutoAnalysisConfig());
+  const [executionConfig, setExecutionConfigSignal] = createSignal<ExecutionConfig>(getExecutionConfig());
 
   analysisQueue.configure({ maxAttempts: autoAnalysisConfig().maxRetries });
   subscribeAutoAnalysisConfig((next) => {
     setAutoAnalysisConfigSignal(next);
     analysisQueue.configure({ maxAttempts: next.maxRetries });
+  });
+
+  subscribeExecutionConfig((next) => {
+    setExecutionConfigSignal(next);
   });
 
   // Automation state store - persists automation progress
@@ -1266,6 +1360,98 @@ export function createTaskCenterStore(options: {
     // 强制刷新 TFS 数据
     await syncTasks({ force: true });
     console.log('[TaskCenter] TFS data synced after clear');
+  };
+
+  const clearPlanExecutionState = async () => {
+    for (const [tfsId] of executionPollers) stopExecutionPoller(tfsId);
+    for (const timeoutId of executionArchiveTimeouts.values()) window.clearTimeout(timeoutId);
+    for (const timeoutId of executionRetryTimeouts.values()) window.clearTimeout(timeoutId);
+    executionArchiveTimeouts.clear();
+    executionRetryTimeouts.clear();
+    executionErrorCounts.clear();
+
+    const tfsIdsToReset = new Set<number>();
+    const EXECUTION_SUB_STAGES = new Set([
+      "plan-exec",
+      "workspace-prep",
+      "tests",
+      "fixes",
+      "ready-review",
+    ]);
+    for (const [key, value] of Object.entries(automationStore[0])) {
+      const tfsId = Number.parseInt(key, 10);
+      if (!Number.isFinite(tfsId)) continue;
+      const isExecutionStage =
+        value.stage === "implementing" ||
+        value.stage === "reviewing" ||
+        (typeof value.subStage === "string" && EXECUTION_SUB_STAGES.has(value.subStage));
+      const isExecutionStatus = value.status === "failed" || value.status === "done";
+      if (isExecutionStage || isExecutionStatus) {
+        tfsIdsToReset.add(tfsId);
+      }
+    }
+
+    for (const key of Object.keys(planExecutionStore.store.executions)) {
+      const tfsId = Number.parseInt(key, 10);
+      if (Number.isFinite(tfsId)) {
+        tfsIdsToReset.add(tfsId);
+      }
+    }
+
+    for (const key of Object.keys(planExecutionStore.store.history)) {
+      const tfsId = Number.parseInt(key, 10);
+      if (Number.isFinite(tfsId)) {
+        tfsIdsToReset.add(tfsId);
+      }
+    }
+
+    for (const item of items()) {
+      tfsIdsToReset.add(item.tfsId);
+    }
+
+    if (planExecutionItemId() != null) {
+      tfsIdsToReset.add(planExecutionItemId() as number);
+    }
+
+    planExecutionStore.clearAll();
+    await clearPlanExecutionPersisted();
+    automationStore[1]({});
+    tfsSyncStore[1]({});
+    autoAnalysisStore[1]({});
+    setItems((prev) =>
+      prev.map((item) => ({
+        ...item,
+        status: "todo",
+        stage: "idle",
+        subStage: undefined,
+        updatedAt: Date.now(),
+      }))
+    );
+    setSelectedItem(null);
+    setTasks([]);
+    setCurrentTaskIndex(-1);
+    setShowTaskPanel(false);
+    setExecuting(false);
+    setPlanExecutionPanelOpen(false);
+    setPlanExecutionItemId(null);
+    console.log('[TaskCenter] Plan execution state cleared');
+
+    const config = getTfsConfig();
+    if (config && tfsIdsToReset.size > 0) {
+      const client = new TFSClient(config);
+      await Promise.all(
+        Array.from(tfsIdsToReset).map(async (tfsId) => {
+          try {
+            await client.updateWorkItemState(tfsId, "已分析", "清除开发状态 (OpenWork)");
+          } catch (error) {
+            console.warn("[TaskCenter] Failed to reset work item state", { tfsId, error });
+          }
+        })
+      );
+    }
+
+    await syncTasks({ force: true });
+    console.log('[TaskCenter] TFS data synced after plan execution clear');
   };
 
   // Embedded Automation Engine - 内嵌式自动化引擎
@@ -1845,7 +2031,8 @@ export function createTaskCenterStore(options: {
         stage: "idle" as TaskCenterStage,
       }));
       // Merge with automation state to preserve items not in TFS query
-      const mergedItems = mergeTfsItemsWithAutomation(tfsItems, automationState ?? {}, tfsSyncState);
+      const mergedItems = mergeTfsItemsWithAutomation(tfsItems, automationState ?? {}, tfsSyncState)
+        .map(normalizeTaskCenterItemStatus);
       setItems(mergedItems);
 
       // First, check TFS subtask sync status before refreshing analysis status
@@ -3065,11 +3252,12 @@ export function createTaskCenterStore(options: {
     planDocs,
     selectedRepos,
     options: {
-      allowQuestions: true,
       includeForgeSkills: true,
       requireArchive: true,
-      requireVerification: true,
+      requireVerification: PLAN_EXECUTION_SKIP_VERIFICATION ? false : true,
+      docDeliveryMode: executionConfig().docDeliveryMode,
       ...overrides,
+      allowQuestions: PLAN_EXECUTION_ALLOW_QUESTIONS,
     },
   });
 
@@ -3214,14 +3402,35 @@ export function createTaskCenterStore(options: {
   };
 
   const handleExecutionMessages = (item: TaskCenterItem, sessionId: string, messages: SessionMessage[]) => {
+    console.log("[TaskCenter] [PlanExec] Messages received", {
+      tfsId: item.tfsId,
+      sessionId,
+      count: messages.length,
+    });
+    console.log("[TaskCenter] [PlanExec] Messages payload", {
+      tfsId: item.tfsId,
+      sessionId,
+      messages,
+    });
+    try {
+      console.log(
+        `[TaskCenter] [PlanExec] Messages JSON for ${item.tfsId}:\n${JSON.stringify(messages, null, 2)}`
+      );
+    } catch (error) {
+      console.warn("[TaskCenter] [PlanExec] Messages JSON stringify failed", error);
+    }
     const executionMessages = messages
       .map((message, index) => toExecutionMessage(message, index))
       .filter((message): message is ExecutionMessage => Boolean(message));
 
     if (executionMessages.length === 0) return;
 
-    const enriched = executionMessages.map((message) => {
+    const assistantMessages = executionMessages.filter((message) => message.role === "assistant");
+    if (assistantMessages.length === 0) return;
+
+    const enriched = assistantMessages.map((message) => {
       const progress = executionMonitor.parseProgress(message);
+      const taskUpdate = executionMonitor.parseTaskUpdate(message);
       const question = executionMonitor.parseQuestion(message);
       const archive = archiveMonitor.detect(message);
       const failed = executionMonitor.isExecutionFailed(message);
@@ -3234,12 +3443,13 @@ export function createTaskCenterStore(options: {
             ? "question"
             : completed
               ? "complete"
-              : progress
+              : taskUpdate || progress
                 ? "progress"
                 : "info";
       return {
         message: { ...message, kind },
         progress,
+        taskUpdate,
         question,
         archive,
         failed,
@@ -3247,17 +3457,70 @@ export function createTaskCenterStore(options: {
       };
     });
 
-    planExecutionStore.appendMessages(item.tfsId, enriched.map((entry) => entry.message));
+    const latestMessage = enriched[enriched.length - 1]?.message ?? null;
+    if (latestMessage) {
+      planExecutionStore.updateExecution(item.tfsId, {
+        latestMessage,
+        latestMessageAt: Date.now(),
+      });
+    }
+
     if (executionErrorCounts.get(item.tfsId)) {
       executionErrorCounts.set(item.tfsId, 0);
     }
 
+    const current = planExecutionStore.getExecution(item.tfsId);
+    const allowQuestions = current?.options?.allowQuestions === true;
+
     for (const entry of enriched) {
+      if (entry.taskUpdate) {
+        const update = entry.taskUpdate;
+        const current = Number.isFinite(update.done ?? Number.NaN) ? update.done : undefined;
+        const total = Number.isFinite(update.total ?? Number.NaN) ? update.total : undefined;
+        const percent =
+          current != null && total != null && total > 0
+            ? Math.min(100, Math.max(0, Math.round((current / total) * 100)))
+            : undefined;
+        const updateStatus = update.status === "failed" || update.status === "blocked" ? "failed" : "running";
+        planExecutionStore.updateExecution(item.tfsId, {
+          status: updateStatus,
+          progress: {
+            status: updateStatus,
+            current,
+            total,
+            task: update.currentTaskId,
+            percent,
+            message:
+              current != null && total != null
+                ? `完成 ${current}/${total}${update.currentTaskId ? `: ${update.currentTaskId}` : ""}`
+                : undefined,
+            updatedAt: Date.now(),
+          },
+          tasksSnapshot: update.tasksMarkdown ?? undefined,
+          lastTaskUpdateAt: Date.now(),
+          schedulerMeta: {
+            executionMode: update.executionMode,
+            dependsOn: update.dependsOn,
+            readyQueue: update.readyQueue,
+            completedTaskId: update.currentTaskId,
+          },
+          error:
+            update.status === "failed" || update.status === "blocked"
+              ? entry.message.content
+              : null,
+        });
+      }
+
       if (entry.progress) {
         planExecutionStore.updateExecution(item.tfsId, { progress: entry.progress, status: "running" });
       }
 
-      if (entry.question) {
+      if (entry.question && allowQuestions) {
+        console.log("[TaskCenter] [PlanExec] Question detected", {
+          tfsId: item.tfsId,
+          sessionId,
+          question: entry.question,
+        });
         planExecutionStore.setQuestion(item.tfsId, entry.question);
         const poller = executionPollers.get(item.tfsId);
         poller?.pause();
@@ -3272,8 +3535,20 @@ export function createTaskCenterStore(options: {
         });
         continue;
       }
+      if (entry.question && !allowQuestions) {
+        console.log("[TaskCenter] [PlanExec] Question ignored (disabled)", {
+          tfsId: item.tfsId,
+          sessionId,
+          question: entry.question,
+        });
+      }
 
       if (!entry.archive.ok && entry.archive.error) {
+        console.log("[TaskCenter] [PlanExec] Archive error", {
+          tfsId: item.tfsId,
+          sessionId,
+          error: entry.archive.error,
+        });
         const archiveError = `${entry.archive.error}。请手动运行 forge-archive 完成归档。`;
         planExecutionStore.updateExecution(item.tfsId, {
           status: "failed",
@@ -3294,9 +3569,14 @@ export function createTaskCenterStore(options: {
       }
 
       if (entry.archive.ok) {
+        console.log("[TaskCenter] [PlanExec] Archive detected", {
+          tfsId: item.tfsId,
+          sessionId,
+          path: entry.archive.path ?? null,
+        });
         const current = planExecutionStore.getExecution(item.tfsId);
         const archiveCompletedAt = Date.now();
-        const baseResult = executionResultParser.parse(current?.messages ?? enriched.map((entry) => entry.message));
+        const baseResult = executionResultParser.parse(assistantMessages);
         const startedAt = current?.startedAt ?? baseResult.startedAt;
         const durationMs =
           startedAt != null ? Math.max(0, archiveCompletedAt - startedAt) : baseResult.durationMs;
@@ -3327,6 +3607,11 @@ export function createTaskCenterStore(options: {
       }
 
       if (entry.failed) {
+        console.log("[TaskCenter] [PlanExec] Execution failed", {
+          tfsId: item.tfsId,
+          sessionId,
+          message: entry.message.content,
+        });
         planExecutionStore.updateExecution(item.tfsId, {
           status: "failed",
           error: entry.message.content,
@@ -3346,9 +3631,13 @@ export function createTaskCenterStore(options: {
       }
 
       if (entry.completed) {
+        console.log("[TaskCenter] [PlanExec] Execution completed", {
+          tfsId: item.tfsId,
+          sessionId,
+        });
         const current = planExecutionStore.getExecution(item.tfsId);
         const completionAt = Date.now();
-        const baseResult = executionResultParser.parse(current?.messages ?? enriched.map((entry) => entry.message));
+        const baseResult = executionResultParser.parse(assistantMessages);
         const startedAt = current?.startedAt ?? baseResult.startedAt;
         const durationMs =
           startedAt != null ? Math.max(0, completionAt - startedAt) : baseResult.durationMs;
@@ -3377,6 +3666,12 @@ export function createTaskCenterStore(options: {
         const message = error instanceof Error ? error.message : String(error);
         const count = (executionErrorCounts.get(item.tfsId) ?? 0) + 1;
         executionErrorCounts.set(item.tfsId, count);
+        console.warn("[TaskCenter] [PlanExec] Polling error", {
+          tfsId: item.tfsId,
+          sessionId,
+          count,
+          message,
+        });
 
         if (count < 3) {
           poller.pause();
@@ -3426,10 +3721,12 @@ export function createTaskCenterStore(options: {
       },
     });
     executionPollers.set(item.tfsId, poller);
+    console.log("[TaskCenter] [PlanExec] Poller started", { tfsId: item.tfsId, sessionId });
     poller.start();
   };
 
   const startPlanExecution = async (item: TaskCenterItem, overrides?: Partial<ExecutionOptions>) => {
+    console.log("[TaskCenter] [PlanExec] Start requested", { tfsId: item.tfsId, overrides });
     const activeClient = options.client();
     if (!activeClient) {
       const reason = "OpenCode 客户端未连接，无法执行计划";
@@ -3445,7 +3742,41 @@ export function createTaskCenterStore(options: {
 
     try {
       const existing = planExecutionStore.getExecution(item.tfsId);
+      if (existing && item.status === "todo" && existing.status !== "running" && existing.status !== "waiting") {
+        planExecutionStore.clearExecutionState(item.tfsId);
+      }
       if (existing && (existing.status === "running" || existing.status === "waiting")) {
+        if (existing.result || existing.archivePath || existing.completedAt) {
+          planExecutionStore.updateExecution(item.tfsId, {
+            result: undefined,
+            archivePath: null,
+            completedAt: null,
+          });
+        }
+        if (!existing.sessionId) {
+          console.warn("[TaskCenter] [PlanExec] Existing execution missing session, clearing", {
+            tfsId: item.tfsId,
+            status: existing.status,
+          });
+          planExecutionStore.clearExecutionState(item.tfsId);
+        } else if (!executionPollers.get(item.tfsId)) {
+          console.warn("[TaskCenter] [PlanExec] Rehydrating poller", {
+            tfsId: item.tfsId,
+            status: existing.status,
+            sessionId: existing.sessionId,
+          });
+          startExecutionPoller(item, existing.sessionId);
+          if (existing.status === "running") {
+            planExecutionStore.updateExecution(item.tfsId, { paused: false, status: "running" });
+          } else if (!existing.question && !existing.error) {
+            planExecutionStore.updateExecution(item.tfsId, { paused: false, status: "running" });
+          }
+        }
+        if (!PLAN_EXECUTION_ALLOW_QUESTIONS && existing?.question) {
+          planExecutionStore.setQuestion(item.tfsId, null);
+          planExecutionStore.updateExecution(item.tfsId, { paused: false, status: "running" });
+          executionPollers.get(item.tfsId)?.resume();
+        }
         return true;
       }
 
@@ -3455,6 +3786,10 @@ export function createTaskCenterStore(options: {
         setError(validation.message);
         markFatalExecutionError(item.tfsId, validation.message);
         return false;
+      }
+
+      if (executionConfig().docDeliveryMode === "forge-files") {
+        await ensureForgeTrackDocs(item.tfsId, planDocs);
       }
 
       const artifact = await readArtifact(item.tfsId);
@@ -3491,12 +3826,24 @@ export function createTaskCenterStore(options: {
       );
       const prompt = new ExecutionPromptBuilder(context).build(overrides);
 
+      console.log(`[TaskCenter] [PlanExec] Execution prompt for ${item.tfsId}:\n${prompt}`);
+
+      console.log("[TaskCenter] [PlanExec] Workspace ready", {
+        tfsId: item.tfsId,
+        workspaceRoot: workspaceResult.workspace.workspaceRoot,
+      });
+
       const sessionId = await sessionManager.createExecutionSession();
+      console.log("[TaskCenter] [PlanExec] Session created", { tfsId: item.tfsId, sessionId });
       planExecutionStore.setExecution(item.tfsId, {
         tfsId: item.tfsId,
         status: "running",
         sessionId,
+        workspaceId: workspaceResult.workspace.id,
         workspaceRoot: workspaceResult.workspace.workspaceRoot,
+        options: context.options,
+        tasksSnapshot: context.planDocs.tasks?.trim() || null,
+        lastTaskUpdateAt: null,
         messages: [],
         progress: { status: "running", updatedAt: Date.now() },
         startedAt: Date.now(),
@@ -3524,9 +3871,11 @@ export function createTaskCenterStore(options: {
         }
       }
 
+      console.log("[TaskCenter] [PlanExec] Starting execution prompt", { tfsId: item.tfsId, sessionId });
       await sessionManager.startExecutionPrompt(sessionId, prompt, {
         model: options.getSelectedModel?.() ?? undefined,
       });
+      console.log("[TaskCenter] [PlanExec] Execution prompt sent", { tfsId: item.tfsId, sessionId });
 
       startExecutionPoller(item, sessionId);
       return true;
@@ -3538,14 +3887,35 @@ export function createTaskCenterStore(options: {
   };
 
   const pausePlanExecution = (tfsId: number) => {
+    if (!PLAN_EXECUTION_ALLOW_PAUSE) {
+      console.log("[TaskCenter] [PlanExec] Pause ignored (disabled)", { tfsId });
+      return;
+    }
+    console.log("[TaskCenter] [PlanExec] Pause requested", { tfsId });
     const poller = executionPollers.get(tfsId);
     poller?.pause();
     planExecutionStore.updateExecution(tfsId, { paused: true, status: "waiting" });
   };
 
   const resumePlanExecution = (tfsId: number) => {
+    if (!PLAN_EXECUTION_ALLOW_PAUSE) {
+      console.log("[TaskCenter] [PlanExec] Resume ignored (disabled)", { tfsId });
+      return;
+    }
+    const state = planExecutionStore.getExecution(tfsId);
+    console.log("[TaskCenter] [PlanExec] Resume requested", { tfsId });
     const poller = executionPollers.get(tfsId);
-    poller?.resume();
+    if (!poller && state?.sessionId) {
+      console.warn("[TaskCenter] [PlanExec] Resume missing poller, rehydrating", {
+        tfsId,
+        sessionId: state.sessionId,
+      });
+      const item = items().find((candidate) => candidate.tfsId === tfsId);
+      if (item) {
+        startExecutionPoller(item, state.sessionId);
+      }
+    }
+    executionPollers.get(tfsId)?.resume();
     planExecutionStore.updateExecution(tfsId, { paused: false, status: "running" });
   };
 
@@ -3583,6 +3953,23 @@ export function createTaskCenterStore(options: {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       markFatalExecutionError(tfsId, `提问回复失败: ${message}`, state.sessionId);
+    }
+  };
+
+  const preparePlanExecution = (tfsId: number) => {
+    const state = planExecutionStore.getExecution(tfsId);
+    if (!state) return;
+    if (!PLAN_EXECUTION_ALLOW_QUESTIONS && state.question) {
+      planExecutionStore.setQuestion(tfsId, null);
+      planExecutionStore.updateExecution(tfsId, { paused: false, status: "running" });
+      executionPollers.get(tfsId)?.resume();
+    }
+    if (Array.isArray(state.messages) && state.messages.length > 0) {
+      console.warn("[TaskCenter] [PlanExec] Clearing stored messages for safe open", {
+        tfsId,
+        count: state.messages.length,
+      });
+      planExecutionStore.updateExecution(tfsId, { messages: [] });
     }
   };
 
@@ -3778,6 +4165,7 @@ export function createTaskCenterStore(options: {
     automationState,
     setAutomationState,
     clearAutomationState,
+    clearPlanExecutionState,
     autoAnalysisMap,
     queueStatus,
     refreshAnalysisStatus,
@@ -3809,6 +4197,7 @@ export function createTaskCenterStore(options: {
     resumePlanExecution,
     cancelPlanExecution,
     answerPlanQuestion,
+    preparePlanExecution,
     // Requirement Analysis Wizard
     wizard,
     wizardActions,
