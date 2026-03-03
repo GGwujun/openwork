@@ -71,6 +71,69 @@ export interface SyncResult {
 // TFS Description 字段长度限制（约 32KB，留一些余量）
 const MAX_DESCRIPTION_LENGTH = 200000;
 const MAX_COMMENT_HTML_LENGTH = Math.max(8000, Math.min(20000, MAX_DESCRIPTION_LENGTH - 1000));
+const SUBMIT_TEST_DATE_OFFSET_MS = 60 * 60 * 1000;
+const FALLBACK_FINISH_OFFSET_MS = 48 * 60 * 60 * 1000;
+
+const SUBMIT_TEST_DATE_EXACT_FIELDS = [
+  "Winning.Demand.SubmitTestDate",
+  "Custom.SubmitTestDate",
+  "Custom.提交测试日期",
+  "提交测试日期",
+];
+
+const parseFieldDate = (value: unknown): Date | null => {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value === "number") {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.length === 10 ? `${trimmed}T00:00:00` : trimmed;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const resolveSubmitTestDateField = (fields?: Record<string, unknown>) => {
+  if (!fields) return null;
+  for (const key of SUBMIT_TEST_DATE_EXACT_FIELDS) {
+    if (fields[key] != null) return { key, value: fields[key] };
+  }
+  const fallbackKey = Object.keys(fields).find((key) =>
+    /提交测试日期/i.test(key) || /submit.?test.?date/i.test(key)
+  );
+  return fallbackKey ? { key: fallbackKey, value: fields[fallbackKey] } : null;
+};
+
+const resolveChildTaskFinishDate = async (
+  tfsClient: TFSClient,
+  parentId: number,
+  project: string
+): Promise<string> => {
+  const fallback = new Date(Date.now() + FALLBACK_FINISH_OFFSET_MS);
+  const workItem = await tfsClient.getWorkItem(parentId, project);
+  const fields = workItem?.fields as Record<string, unknown> | undefined;
+  if (fields) {
+    console.log("[TFS Sync] Parent work item fields:", Object.keys(fields));
+  } else {
+    console.log("[TFS Sync] Parent work item fields: none");
+  }
+  const submitTestField = resolveSubmitTestDateField(fields);
+  if (submitTestField) {
+    console.log("[TFS Sync] Submit test date field:", submitTestField.key, submitTestField.value);
+  } else {
+    console.log("[TFS Sync] Submit test date field: not found");
+  }
+  const submitTestDate = parseFieldDate(submitTestField?.value);
+  if (!submitTestDate && submitTestField?.value != null) {
+    console.log("[TFS Sync] Submit test date parse failed:", submitTestField.value);
+  }
+  if (!submitTestDate) return fallback.toISOString();
+  const adjusted = new Date(submitTestDate.getTime() - SUBMIT_TEST_DATE_OFFSET_MS);
+  return Number.isNaN(adjusted.getTime()) ? fallback.toISOString() : adjusted.toISOString();
+};
 
 /**
  * 创建需求分析子任务
@@ -103,13 +166,19 @@ export async function createAnalysisTask(
     
     // 创建子任务
     console.log('[TFS Sync] Calling createChildTask for analysis...');
+    const finishDate = await resolveChildTaskFinishDate(
+      tfsClient,
+      parentId,
+      options.project
+    );
     const task = await tfsClient.createChildTask(
       options.project,
       {
         title: `[自动生成] ${parentTitle} - 需求分析`,
         description,
         assignedTo: options.assignedTo,
-        priority: options.priority
+        priority: options.priority,
+        finishDate
       },
       parentId,
       'AI分析;OpenWork'
@@ -165,13 +234,19 @@ export async function createPlanTask(
     
     // 创建子任务
     console.log('[TFS Sync] Calling createChildTask for plan...');
+    const finishDate = await resolveChildTaskFinishDate(
+      tfsClient,
+      parentId,
+      options.project
+    );
     const task = await tfsClient.createChildTask(
       options.project,
       {
         title: `[自动生成] ${parentTitle} - 开发计划`,
         description,
         assignedTo: options.assignedTo,
-        priority: options.priority
+        priority: options.priority,
+        finishDate
       },
       parentId,
       'AI计划;OpenWork'
