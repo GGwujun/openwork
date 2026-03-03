@@ -56,6 +56,6 @@ export class TFSSyncManager {
       `- 执行时长: ${formatDuration(result.durationMs)}`,
     ].join("\n");
 
-    await this.tfsClient.resolveWorkItem(workItemId, { comment });
+    await this.tfsClient.addComment(workItemId, comment);
   }
 }
