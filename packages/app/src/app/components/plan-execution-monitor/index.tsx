@@ -1,10 +1,8 @@
 import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import { open } from "@tauri-apps/plugin-opener";
 
 import type { TaskCenterItem } from "../../types";
 import type { PlanExecutionState } from "../../context/plan-execution";
 import ExecutionProgressBar from "./ProgressBar";
-import ExecutionMessageList from "./MessageList";
 import ExecutionQuestionModal from "./QuestionModal";
 import Button from "../button";
 import { isTauriRuntime } from "../../utils";
@@ -48,7 +46,12 @@ const formatDuration = (durationMs?: number | null) => {
   return `${seconds}s`;
 };
 
-const isAbsolutePath = (value: string) => /^(?:[a-zA-Z]:[\\/]|\\/|\/)/.test(value);
+const isAbsolutePath = (value: string) => {
+  if (!value) return false;
+  const first = value[0];
+  if (first === "/" || first === "\\") return true;
+  return value.length > 2 && value[1] === ":" && (value[2] === "\\" || value[2] === "/");
+};
 
 const joinPath = (root: string, relative: string) => {
   const normalizedRoot = root.replace(/[\\/]+$/g, "");
@@ -59,16 +62,25 @@ const joinPath = (root: string, relative: string) => {
 export default function PlanExecutionMonitor(props: PlanExecutionMonitorProps) {
   const statusText = createMemo(() => statusLabel(props.state.status));
   const progressLabel = createMemo(() => props.state.progress?.message ?? statusText());
+  const allowQuestions = createMemo(() => props.state.options?.allowQuestions === true);
+  const isTerminalStatus = createMemo(
+    () => props.state.status === "completed" || props.state.status === "archived" || props.state.status === "failed"
+  );
   const [now, setNow] = createSignal(Date.now());
   const [archiveStatus, setArchiveStatus] = createSignal<string | null>(null);
   const [answering, setAnswering] = createSignal(false);
+  const [showTasks, setShowTasks] = createSignal(true);
+  const latestMessage = createMemo(() => props.state.latestMessage ?? null);
+  const latestMessageTime = createMemo(() =>
+    latestMessage()?.createdAt ? new Date(latestMessage()!.createdAt).toLocaleTimeString() : "-"
+  );
+  const tasksSnapshot = createMemo(() => props.state.tasksSnapshot?.trim() || "");
+  const hasTasksSnapshot = createMemo(() => Boolean(tasksSnapshot()));
 
   const archivePath = createMemo(() => props.state.archivePath ?? props.state.result?.archivePath ?? null);
-  const hasResult = createMemo(() => Boolean(props.state.result));
-  const totalTasks = createMemo(() => props.state.result?.totalTasks ?? props.state.progress?.total ?? null);
-  const completedTasks = createMemo(
-    () => props.state.result?.completedTasks ?? props.state.progress?.current ?? null
-  );
+  const hasResult = createMemo(() => isTerminalStatus() && Boolean(props.state.result));
+  const totalTasks = createMemo(() => props.state.progress?.total ?? props.state.result?.totalTasks ?? null);
+  const completedTasks = createMemo(() => props.state.progress?.current ?? props.state.result?.completedTasks ?? null);
   const elapsedMs = createMemo(() => {
     const startedAt = props.state.startedAt ?? props.state.result?.startedAt;
     if (!startedAt) return null;
@@ -91,6 +103,7 @@ export default function PlanExecutionMonitor(props: PlanExecutionMonitorProps) {
     onCleanup(() => window.clearInterval(timer));
   });
 
+
   const resolveArchiveTarget = () => {
     const path = archivePath();
     if (!path) return null;
@@ -106,9 +119,15 @@ export default function PlanExecutionMonitor(props: PlanExecutionMonitorProps) {
     setArchiveStatus(null);
     if (isTauriRuntime()) {
       try {
-        await open(target);
-        setArchiveStatus("已打开归档");
-        return;
+        const openerModule = await import("@tauri-apps/plugin-opener");
+        const openTarget =
+          openerModule.open ??
+          (openerModule as { default?: (path: string) => Promise<void> }).default;
+        if (openTarget) {
+          await openTarget(target);
+          setArchiveStatus("已打开归档");
+          return;
+        }
       } catch (error) {
         console.warn("Failed to open archive", error);
       }
@@ -134,14 +153,30 @@ export default function PlanExecutionMonitor(props: PlanExecutionMonitorProps) {
 
   return (
     <Show when={props.open}>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-        <div class="w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-2xl border border-dls-border bg-dls-surface shadow-2xl flex flex-col">
+      <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+        onClick={props.onClose}
+      >
+        <div
+          class="w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-2xl border border-dls-border bg-dls-surface shadow-2xl flex flex-col"
+          onClick={(event) => event.stopPropagation()}
+        >
           <div class="flex items-center justify-between border-b border-dls-border px-6 py-4">
             <div>
               <div class="text-sm font-semibold text-dls-text">计划执行监控</div>
               <div class="text-[11px] text-dls-secondary mt-1">
                 #{props.item.tfsId} · {props.item.title}
               </div>
+              <Show when={props.state.workspaceId || props.state.workspaceRoot}>
+                <div class="text-[11px] text-dls-secondary mt-1">
+                  工作区: {props.state.workspaceId ?? "-"} · {props.state.workspaceRoot ?? "-"}
+                </div>
+              </Show>
+              <Show when={props.state.options?.docDeliveryMode}>
+                <div class="text-[11px] text-dls-secondary mt-1">
+                  文档模式: {props.state.options?.docDeliveryMode}
+                </div>
+              </Show>
             </div>
             <Button variant="outline" class="h-8 px-3 text-xs" onClick={props.onClose}>
               关闭
@@ -172,6 +207,21 @@ export default function PlanExecutionMonitor(props: PlanExecutionMonitorProps) {
                   <Show when={props.state.sessionId}>
                     <div>Session: {props.state.sessionId}</div>
                   </Show>
+                  <Show when={props.state.schedulerMeta?.executionMode}>
+                    <div>调度: {props.state.schedulerMeta?.executionMode === "parallel-batch" ? "并行批次" : "串行"}</div>
+                  </Show>
+                  <Show when={props.state.schedulerMeta?.completedTaskId}>
+                    <div>最近完成任务: {props.state.schedulerMeta?.completedTaskId}</div>
+                  </Show>
+                  <Show when={props.state.schedulerMeta?.readyQueue?.length}>
+                    <div>就绪队列: {props.state.schedulerMeta?.readyQueue?.join(", ")}</div>
+                  </Show>
+                  <Show when={props.state.schedulerMeta?.dependsOn?.length}>
+                    <div>依赖: {props.state.schedulerMeta?.dependsOn?.join(", ")}</div>
+                  </Show>
+                  <Show when={props.state.lastTaskUpdateAt}>
+                    <div>最近任务更新: {new Date(props.state.lastTaskUpdateAt as number).toLocaleTimeString()}</div>
+                  </Show>
                   <Show when={props.state.archivePath}>
                     <div>归档: {props.state.archivePath}</div>
                   </Show>
@@ -184,14 +234,7 @@ export default function PlanExecutionMonitor(props: PlanExecutionMonitorProps) {
                 </div>
                 <div class="mt-3 flex flex-wrap gap-2">
                   <Show when={props.state.status === "running"}>
-                    <Button variant="outline" class="h-7 px-3 text-[11px]" onClick={props.onPause}>
-                      暂停
-                    </Button>
-                  </Show>
-                  <Show when={props.state.status === "waiting"}>
-                    <Button variant="outline" class="h-7 px-3 text-[11px]" onClick={props.onResume}>
-                      继续
-                    </Button>
+                    <div class="text-[11px] text-dls-secondary">执行期间不可暂停</div>
                   </Show>
                   <Show when={props.state.status === "running" || props.state.status === "waiting"}>
                     <Button variant="outline" class="h-7 px-3 text-[11px]" onClick={props.onCancel}>
@@ -210,9 +253,39 @@ export default function PlanExecutionMonitor(props: PlanExecutionMonitorProps) {
                   </div>
                 </Show>
               </div>
-              <div class="lg:col-span-2">
-                <ExecutionMessageList messages={props.state.messages} />
+              <div class="lg:col-span-2 rounded-xl border border-dls-border bg-dls-surface p-4">
+                <div class="text-xs font-semibold text-dls-text">最新消息</div>
+                <Show when={latestMessage()} fallback={<div class="mt-2 text-[11px] text-dls-secondary">暂无消息</div>}>
+                  <div class="mt-2 text-[10px] text-dls-secondary">
+                    {latestMessageTime()}
+                  </div>
+                  <pre class="mt-2 max-h-[240px] overflow-auto whitespace-pre-wrap text-xs text-dls-text">
+                    {latestMessage()?.content}
+                  </pre>
+                </Show>
               </div>
+            </div>
+            <div class="rounded-xl border border-dls-border bg-dls-surface p-4">
+              <div class="flex items-center justify-between gap-3">
+                <div class="text-xs font-semibold text-dls-text">当前 tasks.md</div>
+                <Show when={hasTasksSnapshot()}>
+                  <Button
+                    variant="outline"
+                    class="h-7 px-3 text-[11px]"
+                    onClick={() => setShowTasks((prev) => !prev)}
+                  >
+                    {showTasks() ? "收起" : "展开"}
+                  </Button>
+                </Show>
+              </div>
+              <Show
+                when={hasTasksSnapshot()}
+                fallback={<div class="mt-2 text-[11px] text-dls-secondary">暂无任务快照</div>}
+              >
+                <pre class="mt-2 max-h-[280px] overflow-auto whitespace-pre-wrap text-xs text-dls-text">
+                  {showTasks() ? tasksSnapshot() : ""}
+                </pre>
+              </Show>
             </div>
             <Show when={hasResult()}>
               <div class="rounded-xl border border-dls-border bg-dls-surface p-4">
@@ -237,7 +310,7 @@ export default function PlanExecutionMonitor(props: PlanExecutionMonitorProps) {
         </div>
       </div>
       <ExecutionQuestionModal
-        open={Boolean(props.state.question)}
+        open={Boolean(props.state.question) && allowQuestions()}
         question={props.state.question ?? null}
         busy={answering()}
         onClose={props.onClose}

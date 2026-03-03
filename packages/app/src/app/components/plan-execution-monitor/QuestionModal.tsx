@@ -1,4 +1,4 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 
 import Button from "../button";
 
@@ -12,7 +12,17 @@ export type ExecutionQuestionModalProps = {
 
 export default function ExecutionQuestionModal(props: ExecutionQuestionModalProps) {
   const [answer, setAnswer] = createSignal("");
+  const [showFull, setShowFull] = createSignal(false);
   const quickOptions = ["继续执行", "请继续按计划执行", "停止并报告问题"];
+  const MAX_QUESTION_CHARS = 2000;
+
+  const questionText = createMemo(() => props.question ?? "");
+  const isTruncated = createMemo(() => questionText().length > MAX_QUESTION_CHARS);
+  const displayQuestion = createMemo(() =>
+    showFull() || !isTruncated()
+      ? questionText()
+      : `${questionText().slice(0, MAX_QUESTION_CHARS)}\n\n... (问题过长，已截断)`
+  );
 
   const handleSubmit = () => {
     const value = answer().trim();
@@ -27,7 +37,16 @@ export default function ExecutionQuestionModal(props: ExecutionQuestionModalProp
         <div class="w-full max-w-lg rounded-2xl border border-dls-border bg-dls-surface shadow-xl">
           <div class="border-b border-dls-border px-5 py-4">
             <div class="text-sm font-semibold text-dls-text">AI 提问</div>
-            <div class="mt-2 text-xs text-dls-secondary whitespace-pre-wrap">{props.question}</div>
+            <div class="mt-2 text-xs text-dls-secondary whitespace-pre-wrap">{displayQuestion()}</div>
+            <Show when={isTruncated()}>
+              <button
+                type="button"
+                class="mt-2 text-[11px] text-dls-accent hover:text-[var(--dls-accent-hover)]"
+                onClick={() => setShowFull((prev) => !prev)}
+              >
+                {showFull() ? "收起" : "显示完整问题"}
+              </button>
+            </Show>
           </div>
           <div class="p-5 space-y-3">
             <div class="flex flex-wrap gap-2">
@@ -54,6 +73,16 @@ export default function ExecutionQuestionModal(props: ExecutionQuestionModalProp
             <div class="flex justify-end gap-2">
               <Button variant="outline" class="h-8 px-3 text-xs" onClick={props.onClose}>
                 关闭
+              </Button>
+              <Button
+                variant="outline"
+                class="h-8 px-3 text-xs"
+                onClick={() => {
+                  if (props.busy) return;
+                  setAnswer("请继续按计划执行");
+                }}
+              >
+                一键继续
               </Button>
               <Button variant="primary" class="h-8 px-3 text-xs" onClick={handleSubmit} disabled={props.busy}>
                 发送回复
