@@ -1,14 +1,31 @@
 import { createStore } from "solid-js/store";
 
 import { Persist, persisted } from "../utils/persist";
-import type { ExecutionMessage, ExecutionProgress, ExecutionResult } from "../../automation/plan-execution/types";
+import type {
+  ExecutionMessage,
+  ExecutionProgress,
+  ExecutionResult,
+  ExecutionOptions,
+} from "../../automation/plan-execution/types";
 
 export type PlanExecutionState = {
   tfsId: number;
   status: ExecutionProgress["status"];
   sessionId?: string | null;
+  workspaceId?: string | null;
   workspaceRoot?: string | null;
   progress?: ExecutionProgress;
+  options?: ExecutionOptions;
+  tasksSnapshot?: string | null;
+  lastTaskUpdateAt?: number | null;
+  schedulerMeta?: {
+    executionMode?: "serial" | "parallel-batch";
+    dependsOn?: string[];
+    readyQueue?: string[];
+    completedTaskId?: string;
+  };
+  latestMessage?: ExecutionMessage | null;
+  latestMessageAt?: number | null;
   messages: ExecutionMessage[];
   question?: string | null;
   questionAt?: number | null;
@@ -39,8 +56,14 @@ const createDefaultState = (tfsId: number): PlanExecutionState => ({
   tfsId,
   status: "idle",
   sessionId: null,
+  workspaceId: null,
   workspaceRoot: null,
   messages: [],
+  tasksSnapshot: null,
+  lastTaskUpdateAt: null,
+  schedulerMeta: undefined,
+  latestMessage: null,
+  latestMessageAt: null,
   question: null,
   questionAt: null,
   error: null,
@@ -99,6 +122,16 @@ export function createPlanExecutionStore() {
     setStore("executions", tfsId, createDefaultState(tfsId));
   };
 
+  const clearExecutionState = (tfsId: number) => {
+    clearExecution(tfsId);
+    setStore("history", tfsId, []);
+  };
+
+  const clearAll = () => {
+    setStore("executions", {});
+    setStore("history", {});
+  };
+
   return {
     store,
     getExecution,
@@ -108,5 +141,7 @@ export function createPlanExecutionStore() {
     setQuestion,
     addHistory,
     clearExecution,
+    clearExecutionState,
+    clearAll,
   };
 }
