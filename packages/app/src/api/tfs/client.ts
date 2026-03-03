@@ -34,6 +34,7 @@ export class TFSClient {
   private serverUrl: string;
   private pat: string;
   private username: string | null;
+  private workItemTypesCache = new Map<string, Array<{ name: string; referenceName?: string }>>();
 
   constructor(config: TFSConfig) {
     this.serverUrl = (config.serverUrl || DEFAULT_SERVER_URL).replace(/\/$/, '');
@@ -132,6 +133,48 @@ export class TFSClient {
       return `([System.AssignedTo] = @Me OR [System.AssignedTo] = '${safeUsername}')`;
     }
     return `[System.AssignedTo] = @Me`;
+  }
+
+  private async getWorkItemTypes(project: string): Promise<Array<{ name: string; referenceName?: string }>> {
+    const cached = this.workItemTypesCache.get(project);
+    if (cached) return cached;
+    const url = `${this.serverUrl}/${encodeURIComponent(project)}/_apis/wit/workitemtypes?api-version=4.1`;
+    const result = await this.fetchApi<{ value?: Array<{ name: string; referenceName?: string }> }>(url);
+    const types = result.value ?? [];
+    this.workItemTypesCache.set(project, types);
+    return types;
+  }
+
+  private async resolveTaskWorkItemTypes(project: string): Promise<string[]> {
+    try {
+      const types = await this.getWorkItemTypes(project);
+      if (!types.length) return ["Task", "任务"];
+
+      const names = types
+        .map((type) => type.name)
+        .filter((name) => typeof name === "string" && name.trim().length > 0);
+
+      const preferred: string[] = [];
+      const lowerNames = new Map(names.map((name) => [name.toLowerCase(), name]));
+      if (lowerNames.has("task")) preferred.push(lowerNames.get("task") as string);
+      if (lowerNames.has("任务")) preferred.push(lowerNames.get("任务") as string);
+
+      const refMatch = types.find((type) =>
+        typeof type.referenceName === "string" && /\bTask$/i.test(type.referenceName)
+      );
+      if (refMatch?.name && !preferred.includes(refMatch.name)) {
+        preferred.push(refMatch.name);
+      }
+
+      for (const name of names) {
+        if (!preferred.includes(name)) preferred.push(name);
+      }
+
+      return preferred.length ? preferred : ["Task", "任务"];
+    } catch (error) {
+      console.warn("[TFS Client] Failed to resolve work item types", error);
+      return ["Task", "任务"];
+    }
   }
 
 
@@ -389,7 +432,7 @@ export class TFSClient {
       });
     }
 
-    const url = `${this.serverUrl}/${encodeURIComponent(project)}/_apis/wit/workitems/$${workItemType}?api-version=4.1`;
+    const url = `${this.serverUrl}/${encodeURIComponent(project)}/_apis/wit/workitems/$${encodeURIComponent(workItemType)}?api-version=4.1`;
     return await this.fetchApi<WorkItem>(url, {
       method: 'POST',
       headers: this.getPatchAuthHeaders(),
@@ -448,7 +491,7 @@ export class TFSClient {
       finishDate: fields.finishDate ?? nowIso
     };
 
-    const workItemTypes = ['Task', '任务'];
+    const workItemTypes = await this.resolveTaskWorkItemTypes(project);
     let created: WorkItem | null = null;
     let lastError: unknown;
 
