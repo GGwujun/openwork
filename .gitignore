@@ -50,3 +50,5 @@ packages/desktop/tauri.dev.config.json
 # Forge archives
 forge/archives/
 .tmp-docs
+.vercel
+.env*.local

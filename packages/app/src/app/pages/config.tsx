@@ -1,6 +1,7 @@
 import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 
 import { isTauriRuntime } from "../utils";
+import { readPerfLogs } from "../lib/perf-log";
 
 import Button from "../components/button";
 import TextInput from "../components/text-input";
@@ -88,6 +89,9 @@ export default function ConfigView(props: ConfigViewProps) {
   });
 
   const reloadAvailabilityReason = createMemo(() => {
+    if (!props.clientConnected) return "Connect to this worker to reload.";
+    if (!props.canReloadWorkspace) {
+      return "Reloading is only available for local workers or connected OpenWork servers.";
     if (!props.clientConnected) return translate("config.reload.connect_required");
     if (!props.canReloadWorkspace) {
       return translate("config.reload.local_only");
@@ -144,6 +148,7 @@ export default function ConfigView(props: ConfigViewProps) {
     const urlOverride = props.openworkServerSettings.urlOverride?.trim() ?? "";
     const token = props.openworkServerSettings.token?.trim() ?? "";
     const host = hostInfo();
+    const perfLogs = props.developerMode ? readPerfLogs(80) : [];
     return {
       capturedAt: new Date().toISOString(),
       runtime: {
@@ -181,6 +186,10 @@ export default function ConfigView(props: ConfigViewProps) {
       sharing: {
         hostConnectUrl: hostConnectUrl() || null,
         hostConnectUrlUsesMdns: hostConnectUrlUsesMdns(),
+      },
+      performance: {
+        retainedEntries: perfLogs.length,
+        recent: perfLogs,
       },
     };
   });
@@ -495,6 +504,8 @@ export default function ConfigView(props: ConfigViewProps) {
         </div>
 
         <div class="space-y-1">
+          <div class="text-[11px] text-gray-7 font-mono truncate">Resolved worker URL: {resolvedWorkspaceUrl() || "Not set"}</div>
+          <div class="text-[11px] text-gray-8 font-mono truncate">Worker ID: {resolvedWorkspaceId() || "Unavailable"}</div>
           <div class="text-[11px] text-gray-7 font-mono truncate">
             {translate("config.server.resolved_url").replace(
               "{url}",

@@ -67,9 +67,11 @@ export type MessageWithParts = {
   parts: Part[];
 };
 
+export type StepGroupMode = "exploration" | "standalone";
+
 export type MessageGroup =
-  | { kind: "text"; part: Part }
-  | { kind: "steps"; id: string; parts: Part[] };
+  | { kind: "text"; part: Part; segment: "intent" | "result" }
+  | { kind: "steps"; id: string; parts: Part[]; segment: "execution"; mode: StepGroupMode };
 
 export type PromptMode = "prompt" | "shell";
 
@@ -129,12 +131,13 @@ export type View = "onboarding" | "dashboard" | "session" | "task-center" | "pro
 
 export type StartupPreference = "local" | "server";
 
-export type EngineRuntime = "direct" | "openwrk";
+export type EngineRuntime = "direct" | "openwork-orchestrator";
 
 export type OnboardingStep = "welcome" | "local" | "server" | "connecting";
 
 export type DashboardTab =
   | "scheduled"
+  | "soul"
   | "skills"
   | "plugins"
   | "mcp"

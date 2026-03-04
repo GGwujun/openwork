@@ -46,7 +46,7 @@ export function createExtensionsStore(options: {
   setBusyLabel: (value: string | null) => void;
   setBusyStartedAt: (value: number | null) => void;
   setError: (value: string | null) => void;
-  markReloadRequired: (reason: ReloadReason, trigger?: ReloadTrigger) => void;
+  markReloadRequired?: (reason: ReloadReason, trigger?: ReloadTrigger) => void;
   onNotionSkillInstalled?: () => void;
 }) {
   // Translation helper that uses current language from i18n
@@ -418,9 +418,9 @@ export function createExtensionsStore(options: {
     const targetDir = options.projectDir().trim();
 
     if (scope !== "project" && !isLocalWorkspace) {
-      setPluginStatus("Global plugins are only available for local workspaces.");
+      setPluginStatus("Global plugins are only available for local workers.");
       setPluginList([]);
-      setSidebarPluginStatus("Global plugins require a local workspace.");
+      setSidebarPluginStatus("Global plugins require a local worker.");
       setSidebarPluginList([]);
       refreshPluginsInFlight = false;
       return;
@@ -554,7 +554,7 @@ export function createExtensionsStore(options: {
     }
 
     if (pluginScope() !== "project" && !isLocalWorkspace) {
-      setPluginStatus("Global plugins are only available for local workspaces.");
+      setPluginStatus("Global plugins are only available for local workers.");
       return;
     }
 
@@ -601,7 +601,7 @@ export function createExtensionsStore(options: {
           plugin: [pluginName],
         };
         await writeOpencodeConfig(scope, targetDir, `${JSON.stringify(payload, null, 2)}\n`);
-        options.markReloadRequired("plugins", { type: "plugin", name: triggerName, action: "added" });
+        options.markReloadRequired?.("plugins", { type: "plugin", name: triggerName, action: "added" });
         if (isManualInput) {
           setPluginInput("");
         }
@@ -624,10 +624,89 @@ export function createExtensionsStore(options: {
       const updated = applyEdits(raw, edits);
 
       await writeOpencodeConfig(scope, targetDir, updated);
-      options.markReloadRequired("plugins", { type: "plugin", name: triggerName, action: "added" });
+      options.markReloadRequired?.("plugins", { type: "plugin", name: triggerName, action: "added" });
       if (isManualInput) {
         setPluginInput("");
       }
+      await refreshPlugins(scope);
+    } catch (e) {
+      setPluginStatus(e instanceof Error ? e.message : translate("skills.failed_update_opencode"));
+    }
+  }
+
+  async function removePlugin(pluginName: string) {
+    const name = pluginName.trim();
+    if (!name) return;
+    const triggerName = stripPluginVersion(name);
+
+    const isRemoteWorkspace = options.workspaceType() === "remote";
+    const isLocalWorkspace = options.workspaceType() === "local";
+    const openworkClient = options.openworkServerClient();
+    const openworkWorkspaceId = options.openworkServerWorkspaceId();
+    const openworkCapabilities = options.openworkServerCapabilities();
+    const canUseOpenworkServer =
+      options.openworkServerStatus() === "connected" &&
+      openworkClient &&
+      openworkWorkspaceId &&
+      openworkCapabilities?.plugins?.write;
+
+    if (pluginScope() !== "project" && !isLocalWorkspace) {
+      setPluginStatus("Global plugins are only available for local workers.");
+      return;
+    }
+
+    if (pluginScope() === "project" && canUseOpenworkServer) {
+      try {
+        setPluginStatus(null);
+        await openworkClient.removePlugin(openworkWorkspaceId, name);
+        await refreshPlugins("project");
+      } catch (e) {
+        setPluginStatus(e instanceof Error ? e.message : "Failed to remove plugin.");
+      }
+      return;
+    }
+
+    if (!isTauriRuntime()) {
+      setPluginStatus(translate("skills.plugin_management_host_only"));
+      return;
+    }
+
+    if (!isLocalWorkspace && !canUseOpenworkServer) {
+      setPluginStatus("OpenWork server unavailable. Connect to manage plugins.");
+      return;
+    }
+
+    const scope = pluginScope();
+    const targetDir = options.projectDir().trim();
+
+    if (scope === "project" && !targetDir) {
+      setPluginStatus(translate("skills.pick_project_for_plugins"));
+      return;
+    }
+
+    try {
+      setPluginStatus(null);
+      const config = await readOpencodeConfig(scope, targetDir);
+      const raw = config.content ?? "";
+      if (!raw.trim()) {
+        setPluginStatus("No plugins configured yet.");
+        return;
+      }
+
+      const plugins = parsePluginListFromContent(raw);
+      const desired = stripPluginVersion(name).toLowerCase();
+      const next = plugins.filter((entry) => stripPluginVersion(entry).toLowerCase() !== desired);
+      if (next.length === plugins.length) {
+        setPluginStatus("Plugin not found.");
+        return;
+      }
+
+      const edits = modify(raw, ["plugin"], next, {
+        formattingOptions: { insertSpaces: true, tabSize: 2 },
+      });
+      const updated = applyEdits(raw, edits);
+      await writeOpencodeConfig(scope, targetDir, updated);
+      options.markReloadRequired?.("plugins", { type: "plugin", name: triggerName, action: "removed" });
       await refreshPlugins(scope);
     } catch (e) {
       setPluginStatus(e instanceof Error ? e.message : translate("skills.failed_update_opencode"));
@@ -643,7 +722,7 @@ export function createExtensionsStore(options: {
     }
 
     if (!isLocalWorkspace) {
-      options.setError("Local workspaces are required to import skills.");
+      options.setError("Local workers are required to import skills.");
       return;
     }
 
@@ -671,7 +750,7 @@ export function createExtensionsStore(options: {
         setSkillsStatus(result.stderr || result.stdout || translate("skills.import_failed").replace("{status}", String(result.status)));
       } else {
         setSkillsStatus(result.stdout || translate("skills.imported"));
-        options.markReloadRequired("skills", {
+        options.markReloadRequired?.("skills", {
           type: "skill",
           name: inferredName,
           action: "added",
@@ -712,7 +791,7 @@ export function createExtensionsStore(options: {
         });
         const message = translate("skills.skill_creator_installed");
         setSkillsStatus(message);
-        options.markReloadRequired("skills", { type: "skill", name: "skill-creator", action: "added" });
+        options.markReloadRequired?.("skills", { type: "skill", name: "skill-creator", action: "added" });
         await refreshSkills({ force: true });
         return { ok: true, message };
       } catch (e) {
@@ -741,7 +820,7 @@ export function createExtensionsStore(options: {
     }
 
     if (!isLocalWorkspace) {
-      const message = "Local workspaces are required to install skills.";
+      const message = "Local workers are required to install skills.";
       options.setError(message);
       setSkillsStatus(message);
       return { ok: false, message };
@@ -774,7 +853,7 @@ export function createExtensionsStore(options: {
       } else {
         const message = result.stdout || translate("skills.skill_creator_installed");
         setSkillsStatus(message);
-        options.markReloadRequired("skills", { type: "skill", name: "skill-creator", action: "added" });
+        options.markReloadRequired?.("skills", { type: "skill", name: "skill-creator", action: "added" });
         await refreshSkills({ force: true });
         return { ok: true, message };
       }
@@ -836,7 +915,7 @@ export function createExtensionsStore(options: {
     }
 
     if (options.workspaceType() !== "local") {
-      options.setError("Local workspaces are required to uninstall skills.");
+      options.setError("Local workers are required to uninstall skills.");
       return;
     }
 
@@ -861,7 +940,7 @@ export function createExtensionsStore(options: {
         setSkillsStatus(result.stderr || result.stdout || translate("skills.uninstall_failed"));
       } else {
         setSkillsStatus(result.stdout || translate("skills.uninstalled"));
-        options.markReloadRequired("skills", { type: "skill", name: trimmed, action: "removed" });
+        options.markReloadRequired?.("skills", { type: "skill", name: trimmed, action: "removed" });
       }
 
       await refreshSkills({ force: true });
@@ -925,7 +1004,7 @@ export function createExtensionsStore(options: {
     }
 
     if (!isLocalWorkspace) {
-      setSkillsStatus("Local workspaces are required to view skills.");
+      setSkillsStatus("Local workers are required to view skills.");
       return null;
     }
 
@@ -970,7 +1049,7 @@ export function createExtensionsStore(options: {
           content: input.content,
           description: input.description,
         });
-        options.markReloadRequired("skills", { type: "skill", name: trimmed, action: "updated" });
+        options.markReloadRequired?.("skills", { type: "skill", name: trimmed, action: "updated" });
         await refreshSkills({ force: true });
         setSkillsStatus("Saved.");
       } catch (e) {
@@ -993,7 +1072,7 @@ export function createExtensionsStore(options: {
     }
 
     if (!isLocalWorkspace) {
-      setSkillsStatus("Local workspaces are required to edit skills.");
+      setSkillsStatus("Local workers are required to edit skills.");
       return;
     }
 
@@ -1006,7 +1085,7 @@ export function createExtensionsStore(options: {
         setSkillsStatus(result.stderr || result.stdout || translate("skills.unknown_error"));
       } else {
         setSkillsStatus(result.stdout || "Saved.");
-        options.markReloadRequired("skills", { type: "skill", name: trimmed, action: "updated" });
+        options.markReloadRequired?.("skills", { type: "skill", name: trimmed, action: "updated" });
       }
       await refreshSkills({ force: true });
     } catch (e) {
@@ -1045,6 +1124,7 @@ export function createExtensionsStore(options: {
     refreshHubSkills,
     refreshPlugins,
     addPlugin,
+    removePlugin,
     importLocalSkill,
     installSkillCreator,
     installHubSkill,

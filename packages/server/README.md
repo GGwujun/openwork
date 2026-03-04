@@ -112,6 +112,14 @@ Inbox/outbox:
 - `POST /workspace/:id/inbox` (multipart upload into `.opencode/openwork/inbox/`)
 - `GET /workspace/:id/artifacts`
 - `GET /workspace/:id/artifacts/:artifactId`
+- `POST /workspace/:id/files/sessions`
+- `POST /files/sessions/:sessionId/renew`
+- `DELETE /files/sessions/:sessionId`
+- `GET /files/sessions/:sessionId/catalog/snapshot`
+- `GET /files/sessions/:sessionId/catalog/events`
+- `POST /files/sessions/:sessionId/read-batch`
+- `POST /files/sessions/:sessionId/write-batch`
+- `POST /files/sessions/:sessionId/ops`
 
 Toy UI (static assets served by the server):
 
@@ -124,14 +132,14 @@ OpenCode proxy:
 - `GET|POST|... /opencode/*`
 - `GET|POST|... /w/:id/opencode/*`
 
-Owpenbot proxy:
+OpenCode Router proxy:
 
-- `GET|POST|... /owpenbot/*`
-- `GET|POST|... /w/:id/owpenbot/*`
+- `GET|POST|... /opencode-router/*`
+- `GET|POST|... /w/:id/opencode-router/*`
 
 Auth policy:
-- `GET /owpenbot/health` requires client auth.
-- All other `/owpenbot/*` endpoints require host/owner auth.
+- `GET /opencode-router/health` requires client auth.
+- All other `/opencode-router/*` endpoints require host/owner auth.
 
 ## Approvals
 
