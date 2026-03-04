@@ -262,16 +262,16 @@ type SoulStatus = {
     lastRunAt: string | null;
     lastRunStatus: string | null;
     lastRunError: string | null;
+    heartbeatCount: number;
+    lastHeartbeatAt: string | null;
+    lastHeartbeatSummary: string | null;
+    staleAfterMs: number | null;
+    overdue: boolean;
+    summary: string;
+    memoryPath: string;
+    heartbeatPath: string;
   } | null;
-  heartbeatCount: number;
-  lastHeartbeatAt: string | null;
-  lastHeartbeatSummary: string | null;
-  staleAfterMs: number | null;
-  overdue: boolean;
-  summary: string;
-  memoryPath: string;
-  heartbeatPath: string;
-};
+}
 
 export function startServer(config: ServerConfig) {
   const approvals = new ApprovalService(config.approval);
@@ -4696,7 +4696,6 @@ async function deleteOpenCodeRouterSlackIdentity(idRaw: string): Promise<boolean
   return deleted;
 }
 
-type OpenCodeRouterApplyAttempt = {
 async function persistOwpenbotWecomIdentity(identity: {
   id: string;
   mode: "ai-bot" | "app";
